@@ -10,7 +10,7 @@
   "use strict";
 
   // Set this after deploying the Worker (see README). It can also be changed in Settings.
-  var DEFAULT_SYNC_URL = "";
+  var DEFAULT_SYNC_URL = "https://budgie-sync.benjasondixon.workers.dev";
 
   var STORE_KEY = "budgie.db.v1";
   var LOCAL_KEY = "budgie.local.v1";
@@ -88,6 +88,7 @@
   }
   var db = load();
   var local = loadLocal();
+  if (!local.syncUrl) local.syncUrl = DEFAULT_SYNC_URL;
   var ui = { tab: "home", offset: 0, actFilter: "all", actQuery: "", sheet: null };
 
   function persist() {
