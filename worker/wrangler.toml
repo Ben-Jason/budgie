@@ -5,3 +5,6 @@ compatibility_date = "2026-09-01"
 [[kv_namespaces]]
 binding = "DATA"
 id = "ab7b6ce4e1fb48ec9a4eae95ba9bc969"
+
+[observability]
+enabled = true

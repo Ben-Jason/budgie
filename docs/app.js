@@ -74,7 +74,7 @@
     return {
       v: 1,
       settings: { currency: "ZAR", startDay: 1, income: 0, updatedAt: 0 },
-      categories: [], transactions: [], rules: []
+      categories: [], transactions: [], rules: [], unread: []
     };
   }
   function load() {
@@ -351,6 +351,15 @@
     BANKS.some(function (b) { if (low.indexOf(b[0]) > -1) { bank = b[1]; return true; } return false; });
     return { amount: Math.round(amt.v * 100) / 100, type: type, merchant: merchant, date: d ? iso(d) : null, bank: bank, reserved: /reserved/.test(low) };
   }
+  // Messages we couldn't turn into a transaction are kept so nothing is lost silently.
+  function keepUnread(text, at, reason) {
+    db.unread = db.unread || [];
+    var id = "u_" + hash(text);
+    if (db.unread.some(function (u) { return u.id === id; })) return;
+    if (/one-time pin|declined/i.test(reason || "")) return; // genuinely not transactions
+    db.unread.push(touch({ id: id, text: String(text).slice(0, 600), at: at || now(), reason: reason || "" }));
+  }
+  function unreadList() { return (db.unread || []).filter(function (u) { return !u.deleted; }); }
   function titleCase(s) {
     return String(s).toLowerCase().replace(/(^|[\s\-&\/(])([a-z])/g, function (_, a, b) { return a + b.toUpperCase(); })
       .replace(/\b(Fnb|Pnp|Kfc|Bp|Mtn|Atm|Dstv|Sa|Eft|Cc|Za|Mrp|Spar)\b/g, function (w) { return w.toUpperCase(); });
@@ -445,6 +454,10 @@
       h += '<div class="pace-note">' + (left >= 0 ? "🎉 You finished this month " + money(left) + " under budget." : "This month ended " + money(-left) + " over budget.") + '</div>';
     }
     h += '</div>';
+    var un = unreadList();
+    if (un.length) {
+      h += '<button class="review-banner" data-act="unread" type="button" style="background:var(--over-soft);color:var(--over-ink)"><span class="emoji">📩</span><span class="spacer"><b>' + un.length + ' bank message' + (un.length > 1 ? "s" : "") + ' I couldn’t read</b><span class="small">Tap to add ' + (un.length > 1 ? "them" : "it") + ' yourself</span></span>' + ICON.chev + '</button>';
+    }
     if (q.length) {
       h += '<button class="review-banner" data-act="review" type="button"><span class="emoji">🤔</span><span class="spacer"><b>' + q.length + ' transaction' + (q.length > 1 ? "s" : "") + ' to sort</b><span class="small">I wasn’t sure which category — tap to help</span></span>' + ICON.chev + '</button>';
     }
@@ -697,7 +710,7 @@
       h += '<p class="small muted" style="margin-top:0">This device syncs with everyone using the same code. Data is encrypted on your device before it’s uploaded.</p>' +
         '<div class="small muted">Your sync code</div><div class="copy-box"><span>' + esc(code) + '</span><button class="btn sm" data-copy="' + esc(code) + '" type="button">Copy</button></div>' +
         '<div class="small muted" style="margin-top:10px">Invite link for another device (opens Budgie and joins)</div><div class="copy-box"><span>' + esc(joinLink()) + '</span><button class="btn sm" data-copy="' + esc(joinLink()) + '" type="button">Copy</button></div>' +
-        '<p class="small faint">Last synced: ' + (local.lastSync ? new Date(local.lastSync).toLocaleString("en-ZA") : "never") + '</p>' +
+        '<p class="small faint">Last synced: ' + (local.lastSync ? new Date(local.lastSync).toLocaleString("en-ZA") : "never") + '</p>' + smsStatusHtml() +
         '<div class="row wrap"><button class="btn sm primary" data-act="sync-now" type="button">Sync now</button><button class="btn sm" data-act="sms-guide" type="button">📩 Set up bank SMS</button><button class="btn sm danger" data-act="sync-off" type="button">Turn off on this device</button></div>';
     } else {
       h += '<p class="small muted" style="margin-top:0">Keep your phone, laptop and family devices in sync, and let bank SMSes flow in automatically.</p>' +
@@ -747,9 +760,9 @@
     }).join("") + '</div>';
   }
 
-  function txSheet(t) {
+  function txSheet(t, prefill) {
     var isNew = !t;
-    t = t || { id: uid(), date: iso(today()), amount: "", type: "expense", merchant: "", catId: null, note: "", source: "manual" };
+    t = t || Object.assign({ id: uid(), date: iso(today()), amount: "", type: "expense", merchant: "", catId: null, note: "", source: "manual" }, prefill || {});
     if (isNew && ui.offset !== 0) { var pp = period(ui.offset); t.date = pp.e < iso(today()) ? pp.e : pp.s; }
     var state = { type: t.type === "transfer" ? "transfer" : t.type, catId: t.catId === TRANSFER ? null : t.catId };
     var html = sheetHead(isNew ? "Add transaction" : "Edit transaction", t.source === "sms" ? "From " + (t.bank || "bank") + " SMS" : "") +
@@ -1241,7 +1254,7 @@
   function mergeDocs(a, b) {
     var out = blankDb();
     out.settings = (b.settings && (b.settings.updatedAt || 0) > (a.settings.updatedAt || 0)) ? b.settings : a.settings;
-    ["categories", "transactions", "rules"].forEach(function (k) {
+    ["categories", "transactions", "rules", "unread"].forEach(function (k) {
       var map = {};
       (a[k] || []).concat(b[k] || []).forEach(function (r) { var ex = map[r.id]; if (!ex || (r.updatedAt || 0) > (ex.updatedAt || 0)) map[r.id] = r; });
       out[k] = Object.keys(map).map(function (id) { return map[id]; });
@@ -1261,7 +1274,13 @@
       return decryptDoc(res.doc).then(function (remote) {
         var remoteStr = remote ? JSON.stringify(remote) : "";
         if (remote) db = mergeDocs(db, remote);
-        (res.inbox || []).forEach(function (it) { var r = ingestSms(it.text, it.at); if (r.ok) added++; acks.push(it.id); });
+        (res.inbox || []).forEach(function (it) {
+          var r = ingestSms(it.text, it.at);
+          if (r.ok) added++;
+          else if (!r.dup) keepUnread(it.text, it.at, r.reason);
+          acks.push(it.id);
+        });
+        if (res.meta) { local.smsMeta = res.meta; saveLocal(); }
         var merged = JSON.stringify(db);
         persist();
         if (merged !== remoteStr || acks.length) return encryptDoc(db).then(function (box) { return api("/v1/push", { code: local.syncCode, doc: box, ack: acks }); });
@@ -1304,31 +1323,93 @@
     });
   }
 
+  function smsStatusHtml() {
+    var m = local.smsMeta;
+    var box = '<div class="card flat small" style="padding:10px 12px;margin:8px 0;background:var(--surface-2);border:none">';
+    var when = function (t) { var d = new Date(t); return d.toLocaleDateString("en-ZA", { day: "numeric", month: "short" }) + " " + d.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" }); };
+    if (!m || (!m.lastSmsAt && !m.lastAttemptAt)) return box + '📭 <b>No bank SMS has reached Budgie yet.</b><br><span class="muted">If your Shortcut has run, it isn’t reaching the server — check the web address and code in it.</span></div>';
+    var h = box;
+    if (m.lastSmsAt) h += '✅ <b>Last bank SMS received ' + when(m.lastSmsAt) + '</b> · ' + (m.count || 0) + ' so far';
+    if (m.lastError && m.lastAttemptAt >= (m.lastSmsAt || 0)) h += (m.lastSmsAt ? "<br>" : "") + '⚠️ <b>Last attempt ' + when(m.lastAttemptAt) + ' failed:</b> ' + esc(m.lastError) + (m.lastFields && m.lastFields.length ? '<br><span class="faint">Fields sent: ' + esc(m.lastFields.join(", ")) + '</span>' : "");
+    return h + '</div>';
+  }
+  function smsTest(btn) {
+    btn.disabled = true; btn.textContent = "Testing…";
+    var d = new Date();
+    var sample = "FNB :-) R1.00 paid from cheq a/c..0000 @ Budgie Test. Avail R0.00. " + d.getDate() + MONTHS[d.getMonth()].slice(0, 3) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+    var reset = function () { btn.disabled = false; btn.textContent = "Test the connection"; };
+    api("/v1/sms", { code: local.syncCode, text: sample }).then(function () {
+      toast("Test sent — checking it comes back (can take up to a minute)…");
+      var tries = 0;
+      (function poll() {
+        tries++;
+        syncNow().then(function () {
+          var got = txs().filter(function (t) { return t.raw === sample; })[0];
+          if (got) {
+            got.deleted = true; touch(got); persist(); scheduleSync(); reset(); render();
+            toast("✅ Server and app work. If real SMSes still don’t arrive, the Shortcut isn’t firing.");
+            if (!$("#sheetWrap").hidden) smsGuideSheet();
+          } else if (tries < 9) setTimeout(poll, 10000);
+          else { reset(); toast("Test didn’t come back yet — tap Sync now in a minute"); }
+        });
+      })();
+    }).catch(function (e) { reset(); toast("Couldn’t reach the server: " + e.message); });
+  }
+  function unreadSheet() {
+    var list = unreadList();
+    if (!list.length) { closeSheet(); return; }
+    var html = sheetHead("Messages I couldn’t read", "Add them yourself, or dismiss ones that aren’t payments") + list.map(function (u) {
+      return '<div class="card flat" style="margin-bottom:10px"><div class="raw">' + esc(u.text) + '</div><div class="small faint" style="margin:6px 0 8px">' + esc(u.reason || "") + '</div>' +
+        '<div class="row"><button class="btn sm primary" data-un-add="' + u.id + '" type="button">Add as transaction</button><button class="btn sm" data-un-del="' + u.id + '" type="button">Dismiss</button></div></div>';
+    }).join("");
+    openSheet(html, function (el) {
+      el.onclick = function (e) {
+        var add = e.target.closest("[data-un-add]"), del = e.target.closest("[data-un-del]");
+        if (!add && !del) return;
+        var uidv = add ? add.dataset.unAdd : del.dataset.unDel;
+        var u = (db.unread || []).filter(function (x) { return x.id === uidv; })[0]; if (!u) return;
+        u.deleted = true; touch(u); persist(); scheduleSync();
+        if (add) {
+          el.onclick = null;
+          var m = String(u.text).match(/R\s?-?\s?(\d[\d\s,]*(?:[.,]\d{2})?)/);
+          txSheet(null, { amount: m ? Math.abs(parseAmount(m[1])) : "", raw: u.text, source: "sms" });
+        } else { render(); unreadSheet(); }
+      };
+    });
+  }
+
   function smsGuideSheet() {
     var ep = local.syncUrl.replace(/\/+$/, "") + "/v1/sms";
     var html = sheetHead("Forward bank SMS automatically", "Payments land in Budgie and get sorted for you") +
+      smsStatusHtml() +
+      '<button class="btn sm block" data-act="sms-test" type="button" style="margin-bottom:14px">Test the connection</button>' +
       '<div class="seg" id="osSeg" style="margin-bottom:14px"><button type="button" data-os="ios" class="on">iPhone</button><button type="button" data-os="android">Android</button></div>' +
       '<div class="small muted">Web address</div><div class="copy-box" style="margin-bottom:8px"><span>' + esc(ep) + '</span><button class="btn sm" data-copy="' + esc(ep) + '" type="button">Copy</button></div>' +
       '<div class="small muted">Your code</div><div class="copy-box" style="margin-bottom:14px"><span>' + esc(local.syncCode) + '</span><button class="btn sm" data-copy="' + esc(local.syncCode) + '" type="button">Copy</button></div>' +
       '<div id="g-ios"><ol class="steps">' +
-      '<li>In your banking app, turn on <b>SMS notifications</b> for card purchases and payments.</li>' +
-      '<li>Open the <b>Shortcuts</b> app → <b>Automation</b> tab → <b>+</b> → <b>Message</b>.</li>' +
-      '<li>Set <b>Sender</b> to your bank’s SMS contact (e.g. the FNB or Capitec number) — or use <b>Message Contains</b> “R”. Choose <b>Run Immediately</b>, then <b>Next</b>.</li>' +
-      '<li>Add the action <b>Get Contents of URL</b>. Paste the web address above.</li>' +
-      '<li>Tap <b>Show More</b>: Method <b>POST</b>, Request Body <b>JSON</b>. Add a Text field <code>code</code> = your code, and a Text field <code>text</code> = the <b>Shortcut Input</b> variable (tap it and choose <i>Content</i>).</li>' +
-      '<li>Tap <b>Done</b>. Send yourself a test by making a small purchase — it appears next time Budgie opens.</li></ol></div>' +
+      '<li>In your banking app, turn on <b>SMS notifications</b> for card purchases and payments (not only app notifications).</li>' +
+      '<li>Open <b>Shortcuts</b> → <b>Automation</b> tab → <b>+</b> (or <b>New Automation</b>) → scroll to <b>Message</b>.</li>' +
+      '<li>Tap <b>Message Contains</b> and type a word your bank always uses, e.g. <code>Avail</code> or your bank’s name. <i>Don’t</i> use Sender unless the bank is saved as a contact.</li>' +
+      '<li>Choose <b>Run Immediately</b> (not “Run After Confirmation”). Turn <b>Notify When Run</b> on for now so you can see it fire. Tap <b>Next</b> → <b>New Blank Automation</b>.</li>' +
+      '<li>Tap <b>Add Action</b>, search <b>Get Contents of URL</b>. Tap the blue <i>URL</i> placeholder and paste the web address above.</li>' +
+      '<li>Tap the <b>›</b> arrow on that action. Set <b>Method</b> to <b>POST</b> and <b>Request Body</b> to <b>JSON</b>.</li>' +
+      '<li>Tap <b>Add new field → Text</b>. Key: <code>code</code>. Value: paste your code.</li>' +
+      '<li>Tap <b>Add new field → Text</b> again. Key: <code>text</code>. For the value, tap the field, then tap <b>Shortcut Input</b> in the bar above the keyboard. Tap the blue <b>Shortcut Input</b> token and choose <b>Content</b>.</li>' +
+      '<li>Tap <b>Done</b>. Next time your bank SMSes you, you’ll see “Running your automation” at the top, and this page will show “Last bank SMS received”.</li></ol>' +
+      '<p class="small muted"><b>Still nothing?</b> If this page still says “No bank SMS has reached Budgie”, the automation didn’t run — check the Message Contains word appears in the SMS exactly, and that Run Immediately is on. If it shows a failed attempt, the reason tells you which field to fix.</p></div>' +
       '<div id="g-android" hidden><ol class="steps">' +
       '<li>In your banking app, turn on <b>SMS notifications</b> for transactions.</li>' +
       '<li>Install the free <b>MacroDroid</b> app from the Play Store.</li>' +
-      '<li>Add Macro → Trigger: <b>SMS Received</b> → from your bank’s number (or any, with text containing “R”).</li>' +
+      '<li>Add Macro → Trigger: <b>SMS Received</b> → from your bank’s number (or any, with text containing “Avail”).</li>' +
       '<li>Action: <b>Web Interactions → HTTP Request</b>. Method <b>POST</b>, URL = the web address above.</li>' +
       '<li>Body: content type <code>application/json</code>, body <code>{"code":"' + esc(local.syncCode) + '","text":"[sms_message]"}</code></li>' +
       '<li>Save. Bank sends push notifications instead of SMS? Use the <b>Notification Received</b> trigger with <code>[notification]</code> instead.</li></ol></div>' +
-      '<p class="small faint" style="margin-top:14px">Budgie only reads the amount, shop and date. Messages without an amount (like OTPs) are ignored. If it isn’t sure about a category, it asks you.</p>';
+      '<p class="small faint" style="margin-top:14px">Budgie only reads the amount, shop and date. Messages without an amount (like OTPs) are ignored. If it can’t read a message, it shows it on Home so you can add it yourself.</p>';
     openSheet(html, function (el) {
       $$("[data-os]", el).forEach(function (b) { b.onclick = function () { $$("[data-os]", el).forEach(function (x) { x.classList.toggle("on", x === b); }); $("#g-ios", el).hidden = b.dataset.os !== "ios"; $("#g-android", el).hidden = b.dataset.os !== "android"; }; });
     });
   }
+
 
   // ======================================================================
   // Backup
@@ -1385,6 +1466,8 @@
       case "new-cat": catSheet(null); break;
       case "tx": if (!e.target.closest("#sheet")) txSheet(db.transactions.filter(function (t) { return t.id === id; })[0]); break;
       case "review": reviewSheet(); break;
+      case "unread": unreadSheet(); break;
+      case "sms-test": smsTest(a); break;
       case "filter": ui.actFilter = a.dataset.f; render(); break;
       case "pick-file": $("#fileInput").click(); break;
       case "template": downloadFile("budgie-budget-template.csv", templateCsv(), "text/csv"); break;

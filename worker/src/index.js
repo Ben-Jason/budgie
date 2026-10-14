@@ -53,11 +53,30 @@ export default {
     let body;
     try { body = await readBody(request, url); } catch { return json({ error: "bad request" }, 400); }
     const id = await spaceId(body.code || url.searchParams.get("code"));
-    if (!id) return json({ error: "invalid sync code" }, 401);
+    if (!id) {
+      console.log(JSON.stringify({ path: url.pathname, result: "invalid-code", type: request.headers.get("content-type"), keys: Object.keys(body || {}) }));
+      return json({ error: "invalid sync code — check the code field in your Shortcut" }, 401);
+    }
 
     if (url.pathname === "/v1/sms") {
-      const text = String(body.text || body.message || body.sms || "").trim().slice(0, MAX_SMS);
-      if (!text) return json({ error: "no text" }, 400);
+      // Shortcuts sometimes sends the whole Message object instead of its text
+      let rawText = body.text ?? body.message ?? body.sms ?? body.content ?? body.body ?? "";
+      if (rawText && typeof rawText === "object") rawText = rawText.content || rawText.text || rawText.body || JSON.stringify(rawText);
+      const text = String(rawText).trim().slice(0, MAX_SMS);
+      const meta = (await env.DATA.get(`meta:${id}`, "json")) || { count: 0 };
+      meta.lastAttemptAt = Date.now();
+      meta.lastContentType = request.headers.get("content-type") || "";
+      meta.lastFields = Object.keys(body || {}).slice(0, 8);
+      console.log(JSON.stringify({ path: "/v1/sms", space: id.slice(0, 8), len: text.length, type: meta.lastContentType, keys: meta.lastFields }));
+      if (!text) {
+        meta.lastError = "The message text was empty — set the “text” field to Shortcut Input (Content)";
+        await env.DATA.put(`meta:${id}`, JSON.stringify(meta));
+        return json({ error: "no text" }, 400);
+      }
+      meta.lastError = "";
+      meta.lastSmsAt = Date.now();
+      meta.count = (meta.count || 0) + 1;
+      await env.DATA.put(`meta:${id}`, JSON.stringify(meta));
       const pending = await env.DATA.list({ prefix: `sms:${id}:`, limit: MAX_INBOX });
       if (pending.keys.length >= MAX_INBOX) return json({ error: "inbox full — open Budgie to sync" }, 429);
       const key = `sms:${id}:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -72,7 +91,8 @@ export default {
         const v = await env.DATA.get(k.name, "json");
         return v ? { id: k.name.slice(`sms:${id}:`.length), text: v.text, at: v.at } : null;
       }))).filter(Boolean);
-      return json({ doc, inbox });
+      const meta = await env.DATA.get(`meta:${id}`, "json");
+      return json({ doc, inbox, meta });
     }
 
     if (url.pathname === "/v1/push") {
