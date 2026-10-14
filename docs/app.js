@@ -1288,7 +1288,7 @@
       case "sync-create":
         var u = ($("#syncUrl") || {}).value || local.syncUrl;
         if (!/^https:\/\/|^http:\/\/(localhost|127\.0\.0\.1)[:/]/.test(u || "")) { toast("Enter your sync server URL first (https://…)"); return; }
-        local.syncUrl = u.trim(); local.syncCode = newCode(); saveLocal(); cryptoKey = null;
+        local.syncUrl = u.trim(); local.syncCode = newCode(); saveLocal(); cryptoKey = null; render();
         syncNow(true).then(function () { render(); smsGuideSheet(); }); break;
       case "sync-off":
         if (!a.dataset.armed) { a.dataset.armed = 1; a.textContent = "Tap again to confirm"; return; }
