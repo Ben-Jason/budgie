@@ -172,27 +172,29 @@
   // Category knowledge (South African merchants) + auto-categoriser
   // ======================================================================
   var KINDS = {
-    housing: { e: "🏠", syn: ["rent", "bond", "housing", "home loan", "levy", "levies", "mortgage", "accommodation"], m: ["rent", "bond", "home loan", "levy", "levies", "body corporate", "property"] },
-    groceries: { e: "🛒", syn: ["grocer", "food", "supermarket", "household"], m: ["checkers", "shoprite", "pick n pay", "picknpay", "pnp", "woolworths", "woolies", "spar", "food lover", "usave", "boxer", "makro", "sixty60", "ok foods", "fruit & veg", "fruit and veg", "president hyper", "cambridge food", "superspar", "kwikspar", "food store", "butcher"] },
-    eating: { e: "🍔", syn: ["eating", "restaurant", "takeaway", "take-away", "take away", "dining", "eat out", "coffee", "fast food", "meals out"], m: ["kfc", "mcdonald", "mcd ", "nando", "steers", "wimpy", "spur", "debonair", "roman", "ocean basket", "mugg", "vida e", "starbucks", "uber eats", "ubereats", "mr d", "mrd", "burger king", "pizza", "restaurant", "cafe", "coffee", "bakery", "tasha", "fishaways", "chicken licken", "galito", "rocomamas", "panarottis", "john dory", "seattle", "bootlegger", "kauai", "sushi", "grill", "bistro", "doppio", "col'cacchio", "mugg & bean", "mugg&bean"] },
+    housing: { e: "🏠", syn: ["rent", "bond", "erf", "housing", "home loan", "levy", "levies", "mortgage", "accommodation"], m: ["rent", "bond", "home loan", "levy", "levies", "body corporate", "property"] },
+    groceries: { e: "🛒", syn: ["grocer", "food", "supermarket", "household", "kos ", "kos"], m: ["checkers", "shoprite", "pick n pay", "picknpay", "pnp", "woolworths", "woolies", "spar", "food lover", "usave", "boxer", "makro", "sixty60", "ok foods", "fruit & veg", "fruit and veg", "president hyper", "cambridge food", "superspar", "kwikspar", "food store", "butcher"] },
+    eating: { e: "🍔", syn: ["eating", "uiteet", "koffie", "kuier", "restaurant", "takeaway", "take-away", "take away", "dining", "eat out", "coffee", "fast food", "meals out"], m: ["kfc", "mcdonald", "mcd ", "nando", "steers", "wimpy", "spur", "debonair", "roman", "ocean basket", "mugg", "vida e", "starbucks", "uber eats", "ubereats", "mr d", "mrd", "burger king", "pizza", "restaurant", "cafe", "coffee", "bakery", "tasha", "fishaways", "chicken licken", "galito", "rocomamas", "panarottis", "john dory", "seattle", "bootlegger", "kauai", "sushi", "grill", "bistro", "doppio", "col'cacchio", "mugg & bean", "mugg&bean"] },
     fuel: { e: "⛽", syn: ["fuel", "petrol", "diesel", "gas"], m: ["engen", "shell", "bp ", "sasol", "caltex", "totalenergies", "total ", "astron", "fuel", "garage", "puma energy", "petroport"] },
     transport: { e: "🚕", syn: ["transport", "travel", "uber", "taxi", "commute", "parking", "toll"], m: ["uber", "bolt", "gautrain", "taxi", "toll", "sanral", "parking", "e-toll", "myciti", "metrorail", "flysafair", "airlink", "lift airline", "kulula", "intercape", "greyhound"] },
-    car: { e: "🚗", syn: ["car", "vehicle", "auto", "maintenance"], m: ["wesbank", "mfc", "vehicle finance", "tiger wheel", "supa quick", "midas", "autozone", "goldwagen", "car wash", "licence", "license renewal", "dekra"] },
-    utilities: { e: "💡", syn: ["electric", "water", "utilit", "municipal", "rates", "power"], m: ["eskom", "city of", "municipality", "prepaid elec", "electricity", "city power", "water", "rates", "lightstone", "ekurhuleni", "tshwane", "joburg", "cape town"] },
+    car: { e: "🚗", syn: ["car ", "car", "vehicle", "auto", "maintenance", "tracker", "motor"], m: ["wesbank", "mfc", "vehicle finance", "tiger wheel", "supa quick", "midas", "autozone", "goldwagen", "car wash", "licence", "license renewal", "dekra"] },
+    utilities: { e: "💡", syn: ["electric", "water", "ligte", "krag", "utilit", "municipal", "rates", "power"], m: ["eskom", "city of", "municipality", "prepaid elec", "electricity", "city power", "water", "rates", "lightstone", "ekurhuleni", "tshwane", "joburg", "cape town"] },
     phone: { e: "📱", syn: ["phone", "cell", "internet", "wifi", "data", "airtime", "mobile", "fibre"], m: ["vodacom", "mtn", "cell c", "telkom", "rain", "afrihost", "webafrica", "airtime", "data bundle", "vumatel", "openserve", "coolideas", "mweb", "herotel", "frogfoot"] },
-    insurance: { e: "🛡️", syn: ["insurance", "cover", "assurance", "funeral"], m: ["insurance", "outsurance", "santam", "old mutual", "sanlam", "liberty", "discovery life", "momentum", "king price", "miway", "hollard", "budget ins", "1life", "first for women", "dial direct", "auto & general", "clientele", "avbob", "assupol"] },
+    insurance: { e: "🛡️", syn: ["insurance", "cover", "assurance", "funeral", "pps", "naked", "outsurance"], m: ["insurance", "outsurance", "santam", "old mutual", "sanlam", "liberty", "discovery life", "momentum", "king price", "miway", "hollard", "budget ins", "1life", "first for women", "dial direct", "auto & general", "clientele", "avbob", "assupol"] },
     medical: { e: "💊", syn: ["medical", "health", "pharmacy", "doctor", "medicine", "aid"], m: ["dis-chem", "dischem", "clicks", "pharmacy", "doctor", "dr ", "medical", "hospital", "netcare", "mediclinic", "life healthcare", "discovery health", "bonitas", "gems", "fedhealth", "bestmed", "medshield", "dentist", "optometrist", "spec-savers", "specsavers", "pathcare", "lancet"] },
-    subscriptions: { e: "📺", syn: ["subscription", "streaming", "netflix", "apps", "software", "tv"], m: ["netflix", "showmax", "spotify", "apple.com", "itunes", "google", "youtube", "dstv", "multichoice", "disney", "prime video", "amazon prime", "icloud", "microsoft", "openai", "chatgpt", "anthropic", "claude.ai", "adobe", "deezer", "playstation plus", "xbox game pass", "canva"] },
-    shopping: { e: "🛍️", syn: ["shopping", "clothes", "clothing", "personal", "fashion", "household items"], m: ["takealot", "superbalist", "mr price", "mrp", "ackermans", "pep ", "pepstores", "edgars", "foschini", "truworths", "h&m", "cotton on", "game ", "builders", "incredible connection", "amazon", "shein", "temu", "sportscene", "totalsports", "cna", "exclusive books", "markham", "jet ", "identity", "woolworths clothing", "zara", "bash", "makro", "hifi corp", "istore", "dion wired", "loot", "yuppiechef", "mr price home", "sheet street", "@home", "decofurn", "leroy merlin", "cashbuild", "mica"] },
-    entertainment: { e: "🎉", syn: ["entertainment", "fun", "leisure", "hobbies", "going out", "social"], m: ["ster-kinekor", "ster kinekor", "nu metro", "computicket", "ticketpro", "quicket", "howler", "steam", "playstation", "xbox", "bowling", "tops", "liquor", "bottle store", "pub", "bar ", "tavern", "casino"] },
+    subscriptions: { e: "📺", syn: ["subscription", "streaming", "netflix", "apps", "software", "tv"], m: ["netflix", "showmax", "shomax", "apple music", "covenant eyes", "spotify", "apple.com", "itunes", "google", "youtube", "dstv", "multichoice", "disney", "prime video", "amazon prime", "icloud", "microsoft", "openai", "chatgpt", "anthropic", "claude.ai", "adobe", "deezer", "playstation plus", "xbox game pass", "canva"] },
+    shopping: { e: "🛍️", syn: ["shopping", "klere", "aankope", "clothes", "clothing", "personal", "fashion", "household items"], m: ["takealot", "superbalist", "mr price", "mrp", "ackermans", "pep ", "pepstores", "edgars", "foschini", "truworths", "h&m", "cotton on", "game ", "builders", "incredible connection", "amazon", "shein", "temu", "sportscene", "totalsports", "cna", "exclusive books", "markham", "jet ", "identity", "woolworths clothing", "zara", "bash", "makro", "hifi corp", "istore", "dion wired", "loot", "yuppiechef", "mr price home", "sheet street", "@home", "decofurn", "leroy merlin", "cashbuild", "mica"] },
+    entertainment: { e: "🎉", syn: ["entertainment", "events", "fun", "leisure", "hobbies", "going out", "social"], m: ["ster-kinekor", "ster kinekor", "nu metro", "computicket", "ticketpro", "quicket", "howler", "steam", "playstation", "xbox", "bowling", "tops", "liquor", "bottle store", "pub", "bar ", "tavern", "casino"] },
     personal: { e: "💇", syn: ["personal care", "beauty", "hair", "grooming", "toiletries"], m: ["salon", "barber", "hair", "nails", "spa", "beauty"] },
-    fitness: { e: "🏋️", syn: ["gym", "fitness", "sport", "exercise"], m: ["virgin active", "planet fitness", "gym", "crossfit", "parkrun", "strava", "zwift", "sweat1000"] },
+    fitness: { e: "🏋️", syn: ["gym", "fitness", "sport", "exercise", "training", "trainer", "personal training"], m: ["virgin active", "planet fitness", "gym", "crossfit", "parkrun", "strava", "zwift", "sweat1000"] },
     education: { e: "🎓", syn: ["education", "school", "study", "fees", "tuition", "kids"], m: ["school", "university", "unisa", "varsity", "college", "tuition", "udemy", "coursera"] },
     savings: { e: "🏦", syn: ["saving", "invest", "emergency", "retirement", "tfsa", "goal"], m: ["savings", "invest", "easyequities", "easy equities", "satrix", "tfsa", "allan gray", "coronation", "10x", "sygnia", "etfsa", "retirement annuity"] },
     giving: { e: "🎁", syn: ["gift", "giving", "donation", "charity", "church", "tithe"], m: ["church", "tithe", "donation", "givengain", "backabuddy", "charity"] },
     pets: { e: "🐾", syn: ["pet", "dog", "cat", "vet"], m: ["vet", "pet", "petshop", "petworld", "absolute pets", "montana pet"] },
-    fees: { e: "🏧", syn: ["bank fee", "fees", "charges", "bank charges", "interest"], m: ["fee", "service charge", "monthly acc", "admin charge", "interest charged", "sms notif", "cash dep fee"] },
+    fees: { e: "🏧", syn: ["bankfees", "bank fees", "bankfee", "bank fee", "fees", "charges", "bank charges", "interest"], m: ["fee", "service charge", "monthly acc", "admin charge", "interest charged", "sms notif", "cash dep fee"] },
     cash: { e: "💵", syn: ["cash", "atm", "withdrawal"], m: ["atm", "cash withdrawal", "cash wd", "withdrawal", "cash send"] },
+    family: { e: "👪", syn: ["pappa", "mamma", "family", "parents", "mom", "dad", "ouers"], m: [] },
+    home: { e: "🧹", syn: ["housekeeping", "domestic", "cleaning", "huishou"], m: [] },
     debt: { e: "💳", syn: ["debt", "loan", "credit card", "repayment", "store card"], m: ["loan", "credit card", "repayment", "store card", "personal loan", "edgars account", "truworths account"] }
   };
   function guessKind(name) {
@@ -200,6 +202,11 @@
     var best = null, bestLen = 0;
     Object.keys(KINDS).forEach(function (k) {
       KINDS[k].syn.forEach(function (s) { if (n.indexOf(s) > -1 && s.length > bestLen) { best = k; bestLen = s.length; } });
+    });
+    if (best) return best;
+    // category named after a company ("Netflix", "King Price", "Telkom")
+    Object.keys(KINDS).forEach(function (k) {
+      KINDS[k].m.forEach(function (m) { var mm = m.trim(); if (mm.length > 3 && n.indexOf(" " + mm) > -1 && mm.length > bestLen) { best = k; bestLen = mm.length; } });
     });
     return best;
   }
@@ -236,6 +243,12 @@
         .some(function (k) { return k.length > 1 && hay.indexOf(k) > -1; });
     });
     if (kwHits.length === 1) return { catId: kwHits[0].id, confidence: 0.92, suggest: [kwHits[0].id], reason: "Matches your keyword" };
+    // a category called "Netflix" or "King Price" catches that merchant
+    var nameHits = all.filter(function (c) {
+      var n = cleanName(c.name).toLowerCase(); if (n.length < 4) return false;
+      return new RegExp("(^|[^a-z])" + n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "([^a-z]|$)").test(merch);
+    });
+    if (nameHits.length === 1) return { catId: nameHits[0].id, confidence: 0.9, suggest: [nameHits[0].id], reason: "Matches your “" + nameHits[0].name + "” category" };
     // 3. built-in merchant knowledge, mapped onto your category names
     var kinds = [];
     Object.keys(KINDS).forEach(function (k) {
@@ -929,7 +942,7 @@
             wb.SheetNames.forEach(function (sn) {
               var rows = X.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: true, defval: "" });
               var score = detectBudget(rows).items.length + (/budget/i.test(sn) ? 5 : 0);
-              if (score > bestScore) { best = rows; bestScore = score; }
+              if (score >= bestScore && score > 0) { best = rows; bestScore = score; }
             });
             importRows(best || [], file.name);
           } catch (e) { toast("Couldn't read that file: " + e.message); }
@@ -939,9 +952,78 @@
     }
   }
 
+  // ---- Several tables on one sheet (Numbers / Excel layouts like
+  // "Fixed: | Day-to-day: | Investments/savings: | Income:" side by side).
+  // A table = a label cell with an empty (or "Budget") cell to its right,
+  // then a run of name cells below it with amounts in the next column.
+  function cellText(v) { return typeof v === "string" ? v.trim() : ""; }
+  function isNumCell(v) { return typeof v === "number" || (typeof v === "string" && /\d/.test(v) && /^[\sR$€£ZA()\-\d.,]+$/i.test(v.trim()) && !isNaN(parseAmount(v))); }
+  var SKIP_NAME = /^(sub ?-?total|total|totaal|grand total|budgeted|budget|actual|werklik|expenses|income|difference|verskil|balance|surplus|remaining|sum)$/i;
+  function blockKind(h) {
+    if (/credit card|transfer|deduction|summary|balance|account|payslip|unclassified/i.test(h)) return "skip";
+    if (/income|salary|earning|revenue|inkomste|salaris/i.test(h)) return "income";
+    if (/saving|invest|spaar|beleg|goal/i.test(h)) return "savings";
+    if (/fixed|vaste|bill|debit|contract|commit/i.test(h)) return "fixed";
+    if (/exception|once.?off|annual|irregular|uitsonder|ad.?hoc/i.test(h)) return "exception";
+    return "variable";
+  }
+  function cleanName(n) {
+    var t = String(n).replace(/^\s*\((.*)\)\s*$/, "$1").replace(/[:\s]+$/, "").replace(/\s+/g, " ").trim();
+    return t.charAt(0).toUpperCase() + t.slice(1);
+  }
+  function detectBlocks(grid) {
+    var used = {}, blocks = [];
+    for (var r = 0; r < grid.length; r++) {
+      var row = grid[r] || [];
+      for (var c = 0; c < row.length; c++) {
+        if (used[r + ":" + c]) continue;
+        var h = cellText(row[c]);
+        if (!h || h.length > 40 || isNumCell(h)) continue;
+        var right = row[c + 1];
+        if (!(right === "" || right == null || /^(budget|amount|planned|plan|r|zar|bedrag|begroot|monthly|per month)\b/i.test(cellText(right)))) continue;
+        var items = [], numeric = 0;
+        for (var rr = r + 1; rr < grid.length; rr++) {
+          var cell = (grid[rr] || [])[c];
+          var name = cellText(cell);
+          if (!name || isNumCell(cell)) break;
+          var v = (grid[rr] || [])[c + 1];
+          if (isNumCell(v)) numeric++;
+          else if (cellText(v)) { items = null; break; }   // text in the amount column → not a budget table
+          items.push({ name: name, v: v, r: rr });
+        }
+        if (!items || items.length < 2 || numeric < 2) continue;
+        items.forEach(function (it) { used[it.r + ":" + c] = 1; });
+        blocks.push({ header: cleanName(h), kind: blockKind(h), items: items });
+      }
+    }
+    return blocks;
+  }
+  function detectFromBlocks(blocks) {
+    var items = [], incomeItems = [];
+    blocks.forEach(function (b) {
+      if (b.kind === "skip") return;
+      b.items.forEach(function (it) {
+        var name = cleanName(it.name); if (!name || SKIP_NAME.test(name)) return;
+        var amt = isNumCell(it.v) ? Math.round(Math.abs(parseAmount(it.v)) * 100) / 100 : 0;
+        if (b.kind === "income") { incomeItems.push({ name: name, amount: amt, on: amt > 0 }); return; }
+        items.push({
+          name: name.slice(0, 40), budget: amt, group: b.header, keywords: "",
+          fixed: b.kind === "fixed" || b.kind === "savings" ? true : b.kind === "variable" ? false : null,
+          on: amt > 0 && b.kind !== "exception"
+        });
+      });
+    });
+    return { items: items, incomeItems: incomeItems, blocks: blocks.filter(function (b) { return b.kind !== "skip"; }).map(function (b) { return b.header; }) };
+  }
+
   // Figures out which columns are names / amounts / groups, and treats
   // label-only rows ("FIXED COSTS") as group headings.
   function detectBudget(rows) {
+    var blocks = detectBlocks(rows || []);
+    if (blocks.filter(function (b) { return b.kind !== "skip"; }).length >= 2) {
+      var multi = detectFromBlocks(blocks);
+      if (multi.items.length) return multi;
+    }
     rows = (rows || []).map(function (r) { return (r || []).map(function (c) { return c == null ? "" : c; }); }).filter(function (r) { return r.some(function (c) { return String(c).trim() !== ""; }); });
     var isNum = function (v) { return typeof v === "number" || (/\d/.test(String(v)) && !isNaN(parseAmount(v)) && /^[\sR$€£ZA()\-\d.,]+$/i.test(String(v).trim())); };
     var hi = -1, cols = { name: -1, amt: -1, group: -1, kw: -1 };
@@ -966,65 +1048,95 @@
     if (cols.name < 0) { // first mostly-text column
       for (var c2 = 0; c2 < width; c2++) { if (c2 === cols.amt) continue; var t = body.filter(function (r) { return String(r[c2]).trim() && !isNum(r[c2]); }).length; if (t >= Math.max(1, body.length * 0.4)) { cols.name = c2; break; } }
     }
-    var items = [], income = 0, group = "";
-    if (cols.name < 0 || cols.amt < 0) return { items: items, income: 0, cols: cols };
+    var items = [], incomeItems = [], group = "";
+    if (cols.name < 0 || cols.amt < 0) return { items: items, incomeItems: incomeItems, cols: cols };
     body.forEach(function (r) {
       var name = String(r[cols.name] || "").trim(), raw = r[cols.amt], amt = Math.abs(parseAmount(raw));
       var anyNum = r.some(function (v, j) { return j !== cols.name && isNum(v) && parseAmount(v) !== 0; });
       if (name && !anyNum && name.length < 40) { group = titleCase(name.replace(/[:\-]+$/, "")); return; } // heading row
       if (!name || !(amt > 0)) return;
       if (/^(sub)?total|grand total|^sum$|balance|surplus|remaining|left over|difference/i.test(name)) return;
-      if (/income|salary|wage|take.?home|net pay/i.test(name) && !/tax/i.test(name)) { income += amt; return; }
+      if (/income|salary|wage|take.?home|net pay/i.test(name) && !/tax/i.test(name)) { incomeItems.push({ name: name, amount: amt, on: true }); return; }
       items.push({
         name: name.slice(0, 40), budget: Math.round(amt * 100) / 100,
         group: cols.group > -1 && String(r[cols.group]).trim() ? titleCase(String(r[cols.group]).trim()) : (group || ""),
         keywords: cols.kw > -1 ? String(r[cols.kw] || "").trim() : "", on: true
       });
     });
-    return { items: items, income: income, cols: cols };
+    return { items: items, incomeItems: incomeItems, cols: cols };
   }
 
   function importRows(rows, fname) {
     var det = detectBudget(rows);
     if (!det.items.length) { toast("I couldn't find categories and amounts in that file. Try the template."); return; }
     var mode = cats().length ? "merge" : "replace";
+    var cb = function (attrs, on) { return '<input type="checkbox" ' + attrs + ' ' + (on ? "checked" : "") + ' style="width:20px;height:20px;accent-color:var(--accent)">'; };
     function draw() {
-      var tot = det.items.filter(function (i) { return i.on; }).reduce(function (a, i) { return a + i.budget; }, 0);
-      var html = sheetHead("Import budget", esc(fname) + " · " + det.items.length + " categories found") +
+      var on = det.items.filter(function (i) { return i.on; });
+      var tot = on.reduce(function (a, i) { return a + i.budget; }, 0);
+      var inc = det.incomeItems.filter(function (i) { return i.on; }).reduce(function (a, i) { return a + i.amount; }, 0);
+      var groupsSeen = [];
+      det.items.forEach(function (it) { if (groupsSeen.indexOf(it.group) < 0) groupsSeen.push(it.group); });
+      var body = "";
+      if (det.incomeItems.length) {
+        body += '<tr><td colspan="4" class="g" style="padding-top:10px"><b>💰 Income</b> · ' + money(inc) + ' a month</td></tr>' + det.incomeItems.map(function (it, j) {
+          return '<tr><td style="width:30px">' + cb('data-j="' + j + '" data-f="on"', it.on) + '</td><td style="width:34px;font-size:20px">💰</td><td>' + esc(it.name) + '</td><td style="width:110px"><input data-j="' + j + '" data-f="amount" inputmode="decimal" value="' + it.amount + '" class="num"></td></tr>';
+        }).join("");
+      }
+      groupsSeen.forEach(function (g) {
+        var list = det.items.map(function (it, i) { return { it: it, i: i }; }).filter(function (x) { return x.it.group === g; });
+        var gt = list.reduce(function (a, x) { return a + (x.it.on ? x.it.budget : 0); }, 0);
+        body += '<tr><td colspan="4" class="g" style="padding-top:12px"><b>' + esc(g || "Expenses") + '</b> · ' + list.length + ' items · ' + money(gt) + (list[0].it.fixed ? ' · bills' : '') + '</td></tr>';
+        body += list.map(function (x) {
+          var it = x.it, i = x.i;
+          return '<tr' + (it.on ? "" : ' style="opacity:.55"') + '><td style="width:30px">' + cb('data-i="' + i + '" data-f="on"', it.on) + '</td><td style="width:34px;font-size:20px">' + emojiFor(it.name + " " + it.group) + '</td>' +
+            '<td><input data-i="' + i + '" data-f="name" value="' + esc(it.name) + '"></td><td style="width:110px"><input data-i="' + i + '" data-f="budget" inputmode="decimal" value="' + (it.budget || "") + '" placeholder="0" class="num"></td></tr>';
+        }).join("");
+      });
+      var off = det.items.length - on.length;
+      var html = sheetHead("Import budget", esc(fname) + " · " + det.items.length + " categories" + (det.incomeItems.length ? " + income" : "")) +
         (cats().length ? '<div class="seg" id="impMode" style="margin-bottom:12px"><button type="button" data-m="merge" class="' + (mode === "merge" ? "on" : "") + '">Add & update</button><button type="button" data-m="replace" class="' + (mode === "replace" ? "on" : "") + '">Replace all</button></div>' : "") +
-        (det.income ? '<label class="check" style="margin-bottom:10px"><input type="checkbox" id="impIncome" checked> Use ' + money(det.income) + ' as my monthly income</label>' : "") +
-        '<div style="max-height:46dvh;overflow:auto;margin:0 -4px"><table class="imp-table"><tbody>' + det.items.map(function (it, i) {
-          return '<tr><td style="width:30px"><input type="checkbox" data-i="' + i + '" data-f="on" ' + (it.on ? "checked" : "") + ' style="width:20px;height:20px;accent-color:var(--accent)"></td><td style="width:34px;font-size:20px">' + emojiFor(it.name + " " + it.group) + '</td>' +
-            '<td><input data-i="' + i + '" data-f="name" value="' + esc(it.name) + '"><div class="tiny faint" style="padding:2px 4px">' + esc(it.group || "Expenses") + '</div></td><td style="width:110px"><input data-i="' + i + '" data-f="budget" inputmode="decimal" value="' + it.budget + '" class="num"></td></tr>';
-        }).join("") + '</tbody></table></div>' +
+        (off ? '<p class="small muted" style="margin:0 0 8px">' + off + ' item' + (off > 1 ? "s have" : " has") + ' no budget amount, so ' + (off > 1 ? "they’re" : "it’s") + ' unticked — tick to track them anyway.</p>' : "") +
+        '<div style="max-height:52dvh;overflow:auto;margin:0 -4px"><table class="imp-table"><tbody>' + body + '</tbody></table></div>' +
+        (det.incomeItems.length ? '<div class="summary-line"><span class="muted">Monthly income</span><span class="num">' + money(inc) + '</span></div>' : "") +
         '<div class="summary-line total"><span>Total monthly budget</span><span class="num">' + money(tot) + '</span></div>' +
-        '<button class="btn primary block" id="impGo" type="button" style="margin-top:8px">Import ' + det.items.filter(function (i) { return i.on; }).length + ' categories</button>' +
+        '<button class="btn primary block sticky-save" id="impGo" type="button" style="margin-top:8px">Import ' + on.length + ' categories</button>' +
         '<p class="small faint" style="text-align:center">' + (mode === "merge" ? "Existing categories with the same name get the new amount. Nothing else changes." : "Your current categories are replaced. Transactions stay; any in removed categories become unsorted.") + '</p>';
+      var keepScroll = $("#sheet .imp-table") ? $("#sheet .imp-table").parentNode.scrollTop : 0;
       openSheet(html, function (el) {
+        var sc = $(".imp-table", el); if (sc) sc.parentNode.scrollTop = keepScroll;
         $$("[data-m]", el).forEach(function (b) { b.onclick = function () { mode = b.dataset.m; draw(); }; });
-        el.addEventListener("change", function (e) {
-          var inp = e.target.closest("[data-i]"); if (!inp) return;
+        el.onchange = function (e) {
+          var inp = e.target;
+          if (inp.dataset.j != null) {
+            var ii = det.incomeItems[+inp.dataset.j];
+            if (inp.dataset.f === "on") ii.on = inp.checked; else { ii.amount = Math.abs(parseAmount(inp.value)) || 0; ii.on = ii.amount > 0; }
+            draw(); return;
+          }
+          if (inp.dataset.i == null) return;
           var it = det.items[+inp.dataset.i];
-          if (inp.dataset.f === "on") it.on = inp.checked; else if (inp.dataset.f === "budget") it.budget = Math.abs(parseAmount(inp.value)) || 0; else it.name = inp.value.trim();
+          if (inp.dataset.f === "on") it.on = inp.checked;
+          else if (inp.dataset.f === "budget") { it.budget = Math.abs(parseAmount(inp.value)) || 0; if (it.budget > 0) it.on = true; }
+          else it.name = inp.value.trim();
           if (inp.dataset.f !== "name") draw();
-        });
+        };
         $("#impGo", el).onclick = function () {
           var chosen = det.items.filter(function (i) { return i.on && i.name; });
           if (mode === "replace") {
-            var keep = {};
-            cats().forEach(function (c) { keep[c.name.toLowerCase()] = c; });
             var names = chosen.map(function (i) { return i.name.toLowerCase(); });
             cats().forEach(function (c) { if (names.indexOf(c.name.toLowerCase()) < 0) { c.deleted = true; touch(c); txs().forEach(function (t) { if (t.catId === c.id) { t.catId = null; t.needsReview = true; touch(t); } }); } });
           }
           var base = cats().length;
           chosen.forEach(function (it, i) {
             var ex = cats().filter(function (c) { return c.name.toLowerCase() === it.name.toLowerCase(); })[0];
-            if (ex) { ex.budget = it.budget; if (it.group) ex.group = it.group; if (it.keywords) ex.keywords = it.keywords; touch(ex); }
-            else db.categories.push(touch({ id: uid(), name: it.name, emoji: emojiFor(it.name + " " + it.group), budget: it.budget, group: it.group || "Expenses", keywords: it.keywords, kind: guessKind(it.name + " " + it.group), order: base + i }));
+            var fixed = it.fixed === true || it.fixed === false ? it.fixed : null;
+            if (ex) { ex.budget = it.budget; if (it.group) ex.group = it.group; if (it.keywords) ex.keywords = it.keywords; if (fixed != null) ex.fixed = fixed; touch(ex); }
+            else db.categories.push(touch({ id: uid(), name: it.name, emoji: emojiFor(it.name + " " + it.group), budget: it.budget, group: it.group || "Expenses", keywords: it.keywords, kind: guessKind(it.name + " " + it.group), fixed: fixed, order: base + i }));
           });
-          if (det.income && $("#impIncome", el) && $("#impIncome", el).checked) { db.settings.income = det.income; touch(db.settings); }
+          var incTotal = det.incomeItems.filter(function (i) { return i.on; }).reduce(function (a, i) { return a + i.amount; }, 0);
+          if (incTotal) { db.settings.income = Math.round(incTotal * 100) / 100; touch(db.settings); }
           local.onboarded = true; saveLocal();
-          closeSheet(); ui.tab = "home"; commit(); toast("Imported " + chosen.length + " categories ✓");
+          closeSheet(); ui.tab = "home"; commit(); toast("Imported " + chosen.length + " categories" + (incTotal ? " · income " + money(incTotal) : "") + " ✓");
         };
       });
     }
