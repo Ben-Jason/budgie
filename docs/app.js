@@ -74,7 +74,7 @@
     return {
       v: 1,
       settings: { currency: "ZAR", startDay: 1, income: 0, cycle: "salary", salaryWords: "", updatedAt: 0 },
-      categories: [], transactions: [], rules: [], unread: [], paydays: []
+      categories: [], transactions: [], rules: [], unread: [], paydays: [], pending: []
     };
   }
   function load() {
@@ -208,6 +208,47 @@
     var list = (db.paydays || []).filter(function (x) { return !x.deleted; }).sort(function (a, b) { return a.date < b.date ? 1 : -1; });
     return list[0] || null;
   }
+  // When the next budget month is expected to start.
+  function nextMonthStart() { return addDays(period(0).end, 1); }
+  function pendingBudget() { return (db.pending || []).filter(function (x) { return !x.deleted && !x.applied; })[0] || null; }
+  function shortDay(d) { return d.toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short" }); }
+
+  // Writes a budget (from a sheet) into the categories.
+  function applyBudget(items, incomeItems, mode) {
+    var chosen = items.filter(function (i) { return i.on && i.name; });
+    if (mode === "replace") {
+      var names = chosen.map(function (i) { return i.name.toLowerCase(); });
+      cats().forEach(function (c) { if (names.indexOf(c.name.toLowerCase()) < 0) { c.deleted = true; touch(c); txs().forEach(function (t) { if (t.catId === c.id) { t.catId = null; t.needsReview = true; touch(t); } }); } });
+    }
+    var base = cats().length;
+    chosen.forEach(function (it, i) {
+      var ex = cats().filter(function (c) { return c.name.toLowerCase() === it.name.toLowerCase(); })[0];
+      var fixed = it.fixed === true || it.fixed === false ? it.fixed : null;
+      if (ex) { ex.budget = it.budget; if (it.group) ex.group = it.group; if (it.keywords) ex.keywords = it.keywords; if (fixed != null) ex.fixed = fixed; touch(ex); }
+      else db.categories.push(touch({ id: uid(), name: it.name, emoji: emojiFor(it.name + " " + it.group), budget: it.budget, group: it.group || "Expenses", keywords: it.keywords, kind: guessKind(it.name + " " + it.group), fixed: fixed, order: base + i }));
+    });
+    var incTotal = (incomeItems || []).filter(function (i) { return i.on; }).reduce(function (a, i) { return a + i.amount; }, 0);
+    if (incTotal) {
+      db.settings.income = Math.round(incTotal * 100) / 100;
+      if (!db.settings.salaryWords) db.settings.salaryWords = incomeItems.filter(function (i) { return i.on && i.amount >= incTotal * 0.3; }).map(function (i) { return i.name; }).join(", ");
+      touch(db.settings);
+    }
+    return { count: chosen.length, income: incTotal };
+  }
+  function scheduleBudget(items, incomeItems, mode, fname) {
+    (db.pending || []).forEach(function (x) { if (!x.deleted && !x.applied) { x.deleted = true; touch(x); } });
+    db.pending = db.pending || [];
+    db.pending.push(touch({ id: "pb_" + uid(), items: items, incomeItems: incomeItems, mode: mode, fname: fname, afterStart: period(0).s, total: items.filter(function (i) { return i.on; }).reduce(function (a, i) { return a + i.budget; }, 0) }));
+  }
+  // A scheduled budget switches on as soon as a new budget month has begun.
+  function applyPendingIfDue() {
+    var pb = pendingBudget();
+    if (!pb || period(0).s <= pb.afterStart) return null;
+    var r = applyBudget(pb.items, pb.incomeItems, pb.mode);
+    pb.applied = true; pb.appliedFor = period(0).s; touch(pb);
+    return { pb: pb, r: r };
+  }
+
   function announceNewMonth(t) {
     ui.offset = 0;
     toast("💰 Salary in — new budget month started " + fromIso(t.date).getDate() + " " + MONTHS[fromIso(t.date).getMonth()].slice(0, 3), "Undo", function () { undoPayday(t.date); commit(); });
@@ -481,6 +522,8 @@
 
   function render() {
     applyTheme();
+    var due = applyPendingIfDue();
+    if (due) { persist(); scheduleSync(); setTimeout(function () { toast("📄 Your new budget is now active (" + due.r.count + " categories" + (due.pb.fname ? " from " + due.pb.fname : "") + ")"); }, 2600); }
     var p = period(ui.offset);
     $("#monthLabel").textContent = p.label;
     $("#monthSub").textContent = p.sub || (p.current ? p.left + " days left" : "");
@@ -524,10 +567,25 @@
     var q = reviewQueue();
     var h = "";
     var sample = db.transactions.some(function (t) { return t.sample && !t.deleted; });
+    if (p.current && cats().length) {
+      var nx = nextMonthStart(), until = dayDiff(today(), nx), nxIso = iso(nx), pb = pendingBudget();
+      var choice = db.settings.nextChoice || {};
+      if (pb) {
+        if (until <= 7) h += '<div class="card" style="background:var(--accent-soft);border-color:transparent"><div class="row" style="align-items:flex-start"><span style="font-size:24px">📄</span><div class="spacer"><b>Next month’s budget is ready</b><div class="small muted">' + esc(pb.fname || "Your new sheet") + ' (' + money(pb.total) + ') switches on when your next salary arrives' + (salaryMode() ? '' : ' on ' + shortDay(nx)) + '.</div>' +
+          '<div class="row wrap" style="margin-top:10px"><button class="btn sm" data-tab="budget" type="button">See details</button><button class="btn sm" data-act="pending-cancel" type="button">Cancel it</button></div></div></div></div>';
+      } else if (until >= 0 && until <= 2 && choice.forDate !== nxIso) {
+        h += '<div class="card" style="border-color:var(--accent)"><div class="row" style="align-items:flex-start"><span style="font-size:24px">🗓️</span><div class="spacer"><b>' + (until === 0 ? "Payday is expected today" : "Payday in " + until + " day" + (until > 1 ? "s" : "")) + '</b> <span class="small faint">' + shortDay(nx) + (p.estimated ? " (est.)" : "") + '</span>' +
+          '<div class="small muted">Next month will use the same budget (' + money(stats(p).budget) + ') unless you upload a new sheet.</div>' +
+          '<div class="row wrap" style="margin-top:10px"><button class="btn sm primary" data-act="next-keep" data-date="' + nxIso + '" type="button">Keep same budget</button><button class="btn sm" data-act="next-upload" type="button">📄 Upload new sheet</button><button class="btn sm" data-tab="budget" type="button">Edit amounts</button></div></div></div></div>';
+      }
+    }
     var lp = latestPayday();
     if (p.current && lp && local.ackPayday !== lp.id && dayDiff(fromIso(lp.date), today()) <= 7 && dayDiff(fromIso(lp.date), today()) >= 0) {
       h += '<div class="card" style="background:var(--accent-soft);border-color:transparent"><div class="row" style="align-items:flex-start"><span style="font-size:26px">💰</span><div class="spacer"><b>New budget month started</b>' +
-        '<div class="small muted">Your salary' + (lp.amount ? ' of ' + money(lp.amount) : '') + ' arrived on ' + fromIso(lp.date).toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short" }) + '. You’re on the same budget as last month (' + money(stats(p).budget) + ').</div>' +
+        '<div class="small muted">Your salary' + (lp.amount ? ' of ' + money(lp.amount) : '') + ' arrived on ' + fromIso(lp.date).toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short" }) + '. ' + (function () {
+          var ap = (db.pending || []).filter(function (x) { return x.applied && !x.deleted && x.appliedFor === p.s; })[0];
+          return ap ? 'Your new budget from ' + esc(ap.fname || "your sheet") + ' is now active (' + money(stats(p).budget) + ').' : 'You’re on the same budget as last month (' + money(stats(p).budget) + ').';
+        })() + '</div>' +
         '<div class="row wrap" style="margin-top:10px"><button class="btn sm primary" data-act="ack-payday" type="button">Looks good</button><button class="btn sm" data-tab="budget" type="button">Change budget</button><button class="btn sm" data-act="undo-payday" data-date="' + lp.date + '" type="button">Not my salary</button></div></div></div></div>';
     }
     if (sample) h += '<div class="card flat row small" style="background:var(--accent-soft);border-color:transparent"><span>🧪</span><span class="spacer">You’re looking at sample data.</span><button class="btn sm primary" data-act="clear-sample" type="button">Start fresh</button></div>';
@@ -772,6 +830,15 @@
     var total = all.reduce(function (a, c) { return a + (+c.budget || 0); }, 0);
     var inc = +db.settings.income || 0;
     var h = '<div class="grid-2"><div>';
+    var pb = pendingBudget();
+    if (pb) {
+      var pOn = pb.items.filter(function (i) { return i.on; });
+      var changed = pOn.filter(function (i) { var c = all.filter(function (x) { return x.name.toLowerCase() === i.name.toLowerCase(); })[0]; return !c || Math.abs((+c.budget || 0) - i.budget) > 0.5; });
+      h += '<div class="card" style="border-color:var(--accent)"><div class="card-h"><h3>📄 Next month’s budget</h3><span class="small faint">from ' + shortDay(nextMonthStart()) + (salaryMode() ? " (or when salary arrives)" : "") + '</span></div>' +
+        '<div class="small muted">' + esc(pb.fname || "New sheet") + ' · ' + pOn.length + ' categories · new total ' + money(pb.mode === "replace" ? pb.total : total + changed.reduce(function (a, i) { var c = all.filter(function (x) { return x.name.toLowerCase() === i.name.toLowerCase(); })[0]; return a + i.budget - (c ? +c.budget || 0 : 0); }, 0)) + ' (now ' + money(total) + ')</div>' +
+        (changed.length ? '<div style="margin-top:8px">' + changed.slice(0, 8).map(function (i) { var c = all.filter(function (x) { return x.name.toLowerCase() === i.name.toLowerCase(); })[0]; return '<div class="summary-line small"><span>' + esc(i.name) + (c ? "" : ' <span class="pill src">new</span>') + '</span><span class="num">' + (c ? money(c.budget) + " → " : "") + '<b>' + money(i.budget) + '</b></span></div>'; }).join("") + (changed.length > 8 ? '<div class="small faint">+ ' + (changed.length - 8) + ' more changes</div>' : "") + '</div>' : '<p class="small faint">Same amounts as now.</p>') +
+        '<div class="row wrap" style="margin-top:10px"><button class="btn sm" data-act="pending-now" type="button">Use it now instead</button><button class="btn sm danger" data-act="pending-cancel" type="button">Cancel</button></div></div>';
+    }
     h += '<div class="card"><div class="card-h"><h3>Monthly plan</h3></div>' +
       '<label class="field">Expected monthly income (take-home)<input id="incomeInput" inputmode="decimal" value="' + (inc ? inc : "") + '" placeholder="e.g. 32 000"></label>' +
       '<div style="margin-top:12px"><div class="summary-line"><span class="muted">Income</span><span class="num">' + money(inc) + '</span></div>' +
@@ -1199,6 +1266,8 @@
     var det = detectBudget(rows);
     if (!det.items.length) { toast("I couldn't find categories and amounts in that file. Try the template."); return; }
     var mode = cats().length ? "merge" : "replace";
+    var when = cats().length && ui.importForNext ? "next" : "now";
+    ui.importForNext = false;
     var cb = function (attrs, on) { return '<input type="checkbox" ' + attrs + ' ' + (on ? "checked" : "") + ' style="width:20px;height:20px;accent-color:var(--accent)">'; };
     function draw() {
       var on = det.items.filter(function (i) { return i.on; });
@@ -1223,18 +1292,21 @@
         }).join("");
       });
       var off = det.items.length - on.length;
+      var nx = nextMonthStart();
       var html = sheetHead("Import budget", esc(fname) + " · " + det.items.length + " categories" + (det.incomeItems.length ? " + income" : "")) +
+        (cats().length ? '<div class="small muted" style="font-weight:600;margin-bottom:6px">Start using it</div><div class="seg" id="impWhen" style="margin-bottom:10px"><button type="button" data-w="now" class="' + (when === "now" ? "on" : "") + '">Now</button><button type="button" data-w="next" class="' + (when === "next" ? "on" : "") + '">From next payday · ' + shortDay(nx) + '</button></div>' : "") +
         (cats().length ? '<div class="seg" id="impMode" style="margin-bottom:12px"><button type="button" data-m="merge" class="' + (mode === "merge" ? "on" : "") + '">Add & update</button><button type="button" data-m="replace" class="' + (mode === "replace" ? "on" : "") + '">Replace all</button></div>' : "") +
         (off ? '<p class="small muted" style="margin:0 0 8px">' + off + ' item' + (off > 1 ? "s have" : " has") + ' no budget amount, so ' + (off > 1 ? "they’re" : "it’s") + ' unticked — tick to track them anyway.</p>' : "") +
         '<div style="max-height:52dvh;overflow:auto;margin:0 -4px"><table class="imp-table"><tbody>' + body + '</tbody></table></div>' +
         (det.incomeItems.length ? '<div class="summary-line"><span class="muted">Monthly income</span><span class="num">' + money(inc) + '</span></div>' : "") +
         '<div class="summary-line total"><span>Total monthly budget</span><span class="num">' + money(tot) + '</span></div>' +
-        '<button class="btn primary block sticky-save" id="impGo" type="button" style="margin-top:8px">Import ' + on.length + ' categories</button>' +
+        '<button class="btn primary block sticky-save" id="impGo" type="button" style="margin-top:8px">' + (when === "next" ? "Use from next payday" : "Import " + on.length + " categories") + '</button>' +
         '<p class="small faint" style="text-align:center">' + (mode === "merge" ? "Existing categories with the same name get the new amount. Nothing else changes." : "Your current categories are replaced. Transactions stay; any in removed categories become unsorted.") + '</p>';
       var keepScroll = $("#sheet .imp-table") ? $("#sheet .imp-table").parentNode.scrollTop : 0;
       openSheet(html, function (el) {
         var sc = $(".imp-table", el); if (sc) sc.parentNode.scrollTop = keepScroll;
         $$("[data-m]", el).forEach(function (b) { b.onclick = function () { mode = b.dataset.m; draw(); }; });
+        $$("[data-w]", el).forEach(function (b) { b.onclick = function () { when = b.dataset.w; draw(); }; });
         el.onchange = function (e) {
           var inp = e.target;
           if (inp.dataset.j != null) {
@@ -1250,26 +1322,15 @@
           if (inp.dataset.f !== "name") draw();
         };
         $("#impGo", el).onclick = function () {
-          var chosen = det.items.filter(function (i) { return i.on && i.name; });
-          if (mode === "replace") {
-            var names = chosen.map(function (i) { return i.name.toLowerCase(); });
-            cats().forEach(function (c) { if (names.indexOf(c.name.toLowerCase()) < 0) { c.deleted = true; touch(c); txs().forEach(function (t) { if (t.catId === c.id) { t.catId = null; t.needsReview = true; touch(t); } }); } });
-          }
-          var base = cats().length;
-          chosen.forEach(function (it, i) {
-            var ex = cats().filter(function (c) { return c.name.toLowerCase() === it.name.toLowerCase(); })[0];
-            var fixed = it.fixed === true || it.fixed === false ? it.fixed : null;
-            if (ex) { ex.budget = it.budget; if (it.group) ex.group = it.group; if (it.keywords) ex.keywords = it.keywords; if (fixed != null) ex.fixed = fixed; touch(ex); }
-            else db.categories.push(touch({ id: uid(), name: it.name, emoji: emojiFor(it.name + " " + it.group), budget: it.budget, group: it.group || "Expenses", keywords: it.keywords, kind: guessKind(it.name + " " + it.group), fixed: fixed, order: base + i }));
-          });
-          var incTotal = det.incomeItems.filter(function (i) { return i.on; }).reduce(function (a, i) { return a + i.amount; }, 0);
-          if (incTotal) {
-            db.settings.income = Math.round(incTotal * 100) / 100;
-            if (!db.settings.salaryWords) db.settings.salaryWords = det.incomeItems.filter(function (i) { return i.on && i.amount >= incTotal * 0.3; }).map(function (i) { return i.name; }).join(", ");
-            touch(db.settings);
-          }
           local.onboarded = true; saveLocal();
-          closeSheet(); ui.tab = "home"; commit(); toast("Imported " + chosen.length + " categories" + (incTotal ? " · income " + money(incTotal) : "") + " ✓");
+          if (when === "next") {
+            scheduleBudget(JSON.parse(JSON.stringify(det.items)), JSON.parse(JSON.stringify(det.incomeItems)), mode, fname);
+            closeSheet(); ui.tab = "home"; commit();
+            toast("📄 Saved — it switches on when your next salary arrives");
+            return;
+          }
+          var r = applyBudget(det.items, det.incomeItems, mode);
+          closeSheet(); ui.tab = "home"; commit(); toast("Imported " + r.count + " categories" + (r.income ? " · income " + money(r.income) : "") + " ✓");
         };
       });
     }
@@ -1374,7 +1435,7 @@
   function mergeDocs(a, b) {
     var out = blankDb();
     out.settings = (b.settings && (b.settings.updatedAt || 0) > (a.settings.updatedAt || 0)) ? b.settings : a.settings;
-    ["categories", "transactions", "rules", "unread", "paydays"].forEach(function (k) {
+    ["categories", "transactions", "rules", "unread", "paydays", "pending"].forEach(function (k) {
       var map = {};
       (a[k] || []).concat(b[k] || []).forEach(function (r) { var ex = map[r.id]; if (!ex || (r.updatedAt || 0) > (ex.updatedAt || 0)) map[r.id] = r; });
       out[k] = Object.keys(map).map(function (id) { return map[id]; });
@@ -1591,12 +1652,16 @@
       case "tx": if (!e.target.closest("#sheet")) txSheet(db.transactions.filter(function (t) { return t.id === id; })[0]); break;
       case "review": reviewSheet(); break;
       case "unread": unreadSheet(); break;
+      case "next-keep": db.settings.nextChoice = { forDate: a.dataset.date, choice: "keep" }; touch(db.settings); commit(); toast("👍 Same budget next month"); break;
+      case "next-upload": ui.importForNext = true; $("#fileInput").click(); break;
+      case "pending-cancel": var pbc = pendingBudget(); if (pbc) { pbc.deleted = true; touch(pbc); } commit(); toast("Cancelled — next month keeps the current budget"); break;
+      case "pending-now": var pbn = pendingBudget(); if (pbn) { var rn = applyBudget(pbn.items, pbn.incomeItems, pbn.mode); pbn.applied = true; touch(pbn); commit(); toast("Using the new budget now (" + rn.count + " categories)"); } break;
       case "ack-payday": var lp1 = latestPayday(); if (lp1) { local.ackPayday = lp1.id; saveLocal(); } render(); break;
       case "undo-payday": undoPayday(a.dataset.date); commit(); toast("Okay — that payment no longer starts a month"); break;
       case "del-payday": undoPayday(a.dataset.date); commit(); break;
       case "sms-test": smsTest(a); break;
       case "filter": ui.actFilter = a.dataset.f; render(); break;
-      case "pick-file": $("#fileInput").click(); break;
+      case "pick-file": ui.importForNext = false; $("#fileInput").click(); break;
       case "template": downloadFile("budgie-budget-template.csv", templateCsv(), "text/csv"); break;
       case "starter": addStarter(); local.onboarded = true; saveLocal(); commit(); toast("Added suggested categories — tweak amounts on the Budget tab"); break;
       case "sample": loadSample(); commit(); break;
