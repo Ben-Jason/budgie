@@ -73,8 +73,8 @@
   function blankDb() {
     return {
       v: 1,
-      settings: { currency: "ZAR", startDay: 1, income: 0, updatedAt: 0 },
-      categories: [], transactions: [], rules: [], unread: []
+      settings: { currency: "ZAR", startDay: 1, income: 0, cycle: "salary", salaryWords: "", updatedAt: 0 },
+      categories: [], transactions: [], rules: [], unread: [], paydays: []
     };
   }
   function load() {
@@ -111,24 +111,108 @@
   // ======================================================================
   // Budget periods (supports a payday start, e.g. the 25th)
   // ======================================================================
-  function period(offset) {
+  function addMonths(d, n, day) {
+    var y = d.getFullYear(), m = d.getMonth() + n, dd = day || d.getDate();
+    var last = new Date(y, m + 1, 0).getDate();
+    return new Date(y, m, Math.min(dd, last));
+  }
+  // Paydays (salary dates) that start each budget month, oldest first.
+  function paydayDates() {
+    var seen = {};
+    return (db.paydays || []).filter(function (x) { return !x.deleted && x.date && !seen[x.date] && (seen[x.date] = 1); })
+      .map(function (x) { return x.date; }).sort();
+  }
+  function salaryMode() { return (db.settings.cycle || "salary") === "salary"; }
+  function makePeriod(start, end, offset, estimated) {
+    var t = today();
+    var days = dayDiff(start, end) + 1;
+    var elapsed = clamp(dayDiff(start, t) + 1, 0, days);
+    var current = t >= start && t <= end;
+    var mid = addDays(start, Math.floor(days / 2));
+    var short = function (d) { return d.getDate() + " " + MONTHS[d.getMonth()].slice(0, 3); };
+    var plain = start.getDate() === 1 && end.getDate() === new Date(end.getFullYear(), end.getMonth() + 1, 0).getDate() && start.getMonth() === end.getMonth();
+    return {
+      start: start, end: end, s: iso(start), e: iso(end), days: days, elapsed: elapsed,
+      left: days - elapsed, current: current, offset: offset || 0, estimated: !!estimated,
+      label: MONTHS[mid.getMonth()] + " " + mid.getFullYear(),
+      sub: plain ? "" : short(start) + " – " + short(end) + (estimated && current ? " (est.)" : "")
+    };
+  }
+  function calendarPeriod(offset) {
     var sd = clamp(+db.settings.startDay || 1, 1, 28);
     var t = today();
     var start = t.getDate() >= sd ? new Date(t.getFullYear(), t.getMonth(), sd) : new Date(t.getFullYear(), t.getMonth() - 1, sd);
     start = new Date(start.getFullYear(), start.getMonth() + (offset || 0), sd);
-    var end = new Date(start.getFullYear(), start.getMonth() + 1, sd - 1);
-    if (sd === 1) end = new Date(start.getFullYear(), start.getMonth() + 1, 0);
-    var days = dayDiff(start, end) + 1;
-    var elapsed = offset < 0 ? days : offset > 0 ? 0 : dayDiff(start, t) + 1;
-    var named = sd > 15 ? end : start;
-    var short = function (d) { return d.getDate() + " " + MONTHS[d.getMonth()].slice(0, 3); };
-    return {
-      start: start, end: end, s: iso(start), e: iso(end), days: days, elapsed: elapsed,
-      left: days - elapsed, current: !offset, offset: offset || 0,
-      label: MONTHS[named.getMonth()] + " " + named.getFullYear(),
-      sub: sd === 1 ? "" : short(start) + " – " + short(end)
-    };
+    var end = addDays(new Date(start.getFullYear(), start.getMonth() + 1, sd), -1);
+    return makePeriod(start, end, offset, false);
   }
+  function period(offset) {
+    offset = offset || 0;
+    var pd = salaryMode() ? paydayDates().map(fromIso) : [];
+    var t = today();
+    pd = pd.filter(function (d) { return d <= t; });
+    if (!pd.length) return calendarPeriod(offset);
+    var payDay = pd[pd.length - 1].getDate();
+    var last = pd.length - 1, idx = last + offset;   // which payday starts the wanted month
+    var start, end, est = false;
+    if (offset > 0) {
+      // future month: guess from the usual pay date
+      start = addMonths(pd[last], offset, payDay);
+      end = addDays(addMonths(pd[last], offset + 1, payDay), -1); est = true;
+    } else if (idx >= 0) {
+      start = pd[idx];
+      if (idx < last) end = addDays(pd[idx + 1], -1);
+      else {
+        // current month: next salary hasn't arrived yet, so assume the same
+        // date next month — and stretch the month if the salary is late
+        end = addDays(addMonths(start, 1, payDay), -1); est = true;
+        if (end < t) end = t;
+      }
+    } else {
+      // before the first recorded payday: step back a month at a time
+      start = addMonths(pd[0], idx);
+      end = addDays(addMonths(pd[0], idx + 1), -1);
+    }
+    return makePeriod(start, end, offset, est);
+  }
+
+  // ---- Salary detection: a salary payment starts a new budget month ----
+  function salaryWords() {
+    var w = String(db.settings.salaryWords || "").split(",").map(function (x) { return x.trim().toLowerCase(); }).filter(function (x) { return x.length > 1; });
+    return w.concat(["salary", "salaris", "payroll", "wages", "sal "]);
+  }
+  function looksLikeSalary(t) {
+    if (t.type !== "income") return false;
+    var hay = (" " + (t.merchant || "") + " " + (t.raw || "") + " " + (t.note || "") + " ").toLowerCase();
+    if (salaryWords().some(function (w) { return hay.indexOf(w) > -1; })) return true;
+    var expected = +db.settings.income || 0;
+    return expected > 0 && t.amount >= expected * 0.6;
+  }
+  // Returns true if this payment started a new budget month.
+  function maybeStartMonth(t, force) {
+    if (!salaryMode() || t.type !== "income") return false;
+    if (!force && !looksLikeSalary(t)) return false;
+    db.paydays = db.paydays || [];
+    var d = fromIso(t.date);
+    var near = db.paydays.filter(function (x) { return !x.deleted && Math.abs(dayDiff(fromIso(x.date), d)) <= 10; })[0];
+    if (near) { if (force && near.date !== t.date) { near.deleted = true; touch(near); } else return false; }
+    db.paydays.push(touch({ id: "pd_" + t.date, date: t.date, txId: t.id, amount: t.amount, label: t.merchant }));
+    t.salary = true;
+    return true;
+  }
+  function undoPayday(date) {
+    (db.paydays || []).forEach(function (x) { if (x.date === date && !x.deleted) { x.deleted = true; touch(x); } });
+    txs().forEach(function (t) { if (t.salary && t.date === date) { t.salary = false; touch(t); } });
+  }
+  function latestPayday() {
+    var list = (db.paydays || []).filter(function (x) { return !x.deleted; }).sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+    return list[0] || null;
+  }
+  function announceNewMonth(t) {
+    ui.offset = 0;
+    toast("💰 Salary in — new budget month started " + fromIso(t.date).getDate() + " " + MONTHS[fromIso(t.date).getMonth()].slice(0, 3), "Undo", function () { undoPayday(t.date); commit(); });
+  }
+
   function inPeriod(t, p) { return t.date >= p.s && t.date <= p.e; }
   function stats(p) {
     var list = txs().filter(function (t) { return inPeriod(t, p); });
@@ -383,6 +467,7 @@
     if (p.type === "transfer") { tx.catId = TRANSFER; tx.needsReview = false; } else applyCategory(tx);
     if (opts && opts.sample) tx.sample = true;
     db.transactions.push(tx);
+    if (!(opts && opts.sample) && maybeStartMonth(tx)) return { ok: true, tx: tx, newMonth: true };
     return { ok: true, tx: tx };
   }
 
@@ -439,6 +524,12 @@
     var q = reviewQueue();
     var h = "";
     var sample = db.transactions.some(function (t) { return t.sample && !t.deleted; });
+    var lp = latestPayday();
+    if (p.current && lp && local.ackPayday !== lp.id && dayDiff(fromIso(lp.date), today()) <= 7 && dayDiff(fromIso(lp.date), today()) >= 0) {
+      h += '<div class="card" style="background:var(--accent-soft);border-color:transparent"><div class="row" style="align-items:flex-start"><span style="font-size:26px">💰</span><div class="spacer"><b>New budget month started</b>' +
+        '<div class="small muted">Your salary' + (lp.amount ? ' of ' + money(lp.amount) : '') + ' arrived on ' + fromIso(lp.date).toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short" }) + '. You’re on the same budget as last month (' + money(stats(p).budget) + ').</div>' +
+        '<div class="row wrap" style="margin-top:10px"><button class="btn sm primary" data-act="ack-payday" type="button">Looks good</button><button class="btn sm" data-tab="budget" type="button">Change budget</button><button class="btn sm" data-act="undo-payday" data-date="' + lp.date + '" type="button">Not my salary</button></div></div></div></div>';
+    }
     if (sample) h += '<div class="card flat row small" style="background:var(--accent-soft);border-color:transparent"><span>🧪</span><span class="spacer">You’re looking at sample data.</span><button class="btn sm primary" data-act="clear-sample" type="button">Start fresh</button></div>';
     h += '<div class="grid-2"><div>';
     h += '<div class="card hero"><div class="eyebrow">' + (left >= 0 ? "Left to spend" : "Over budget") + (p.current ? "" : " · " + esc(p.label)) + '</div>' +
@@ -722,9 +813,17 @@
       '<label class="check"><input type="checkbox" id="simpleToggle" ' + (local.simple ? "checked" : "") + '> <span><b>Easy view</b><br><span class="small muted">Bigger text and fewer screens — great for parents. This device only.</span></span></label>' +
       '<div><div class="small muted" style="margin-bottom:6px">Theme</div><div class="seg" id="themeSeg">' + ["auto", "light", "dark"].map(function (t) { return '<button type="button" data-theme-v="' + t + '" class="' + (local.theme === t ? "on" : "") + '">' + t[0].toUpperCase() + t.slice(1) + '</button>'; }).join("") + '</div></div>' +
       '</div></div>';
+    var pds = paydayDates().slice(-4).reverse();
     h += '<div class="card"><div class="card-h"><h3>Budget month</h3></div>' +
-      '<label class="field">My budget month starts on day (payday)<select id="startDay">' + Array.from({ length: 28 }, function (_, i) { return '<option ' + (+db.settings.startDay === i + 1 ? "selected" : "") + '>' + (i + 1) + '</option>'; }).join("") + '</select></label>' +
-      '<p class="small faint" style="margin:8px 0 0">Paid on the 25th? Set 25 and each budget month runs 25th → 24th.</p>' +
+      '<div class="seg" id="cycleSeg" style="margin-bottom:10px"><button type="button" data-cycle="salary" class="' + (salaryMode() ? "on" : "") + '">When salary arrives</button><button type="button" data-cycle="calendar" class="' + (salaryMode() ? "" : "on") + '">Fixed day</button></div>' +
+      (salaryMode() ?
+        '<p class="small muted" style="margin:0 0 10px">A new month starts automatically when your salary comes in (by bank SMS or added by hand). Your budget carries over.</p>' +
+        '<label class="field">Salary payments contain <span class="faint" style="font-weight:400">— comma separated</span><input id="salaryWords" value="' + esc(db.settings.salaryWords || "") + '" placeholder="e.g. Rugby, Acme Pty"></label>' +
+        '<p class="small faint" style="margin:6px 0 10px">Also counts: “salary”, “salaris”, “payroll”, or any deposit of 60%+ of your expected income.</p>' +
+        '<div class="small muted" style="font-weight:600;margin-bottom:4px">Recent paydays</div>' +
+        (pds.length ? pds.map(function (d) { return '<div class="summary-line"><span>💰 ' + fromIso(d).toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "long", year: "numeric" }) + '</span><button class="link" data-act="del-payday" data-date="' + d + '" type="button">Remove</button></div>'; }).join("") : '<p class="small faint" style="margin:0 0 6px">None yet — until your first salary is detected, months start on day ' + (+db.settings.startDay || 1) + '.</p>') +
+        '<label class="field" style="margin-top:8px">Until then, start months on day<select id="startDay">' : '<label class="field">My budget month starts on day<select id="startDay">') +
+      Array.from({ length: 28 }, function (_, i) { return '<option ' + (+db.settings.startDay === i + 1 ? "selected" : "") + '>' + (i + 1) + '</option>'; }).join("") + '</select></label>' +
       '<label class="field" style="margin-top:12px">Currency<select id="currency">' + ["ZAR", "USD", "GBP", "EUR", "NAD", "BWP"].map(function (c) { return '<option ' + (db.settings.currency === c ? "selected" : "") + '>' + c + '</option>'; }).join("") + '</select></label></div>';
     h += '<div class="card"><div class="card-h"><h3>Test the SMS reader</h3></div><p class="small muted" style="margin-top:0">Paste one or more bank SMSes (one per line). I’ll add them as transactions.</p>' +
       '<textarea id="smsPaste" placeholder="FNB :-) R245.50 paid from cheq a/c..123456 @ Checkers Hyper. Avail R4 321.00. 14Oct 13:02"></textarea>' +
@@ -772,14 +871,23 @@
       '<div id="catWrap"><div class="small muted" style="margin-bottom:6px;font-weight:600">Category</div>' + catPicker(state.catId, t.suggest) + '</div>' +
       '<div class="row"><label class="field" style="flex:1">Date<input type="date" id="txDate" value="' + t.date + '"></label><label class="field" style="flex:1.4">Note<input id="txNote" value="' + esc(t.note || "") + '" placeholder="Optional"></label></div>' +
       (t.raw ? '<div class="raw">' + esc(t.raw) + '</div>' : "") +
+      '<label class="check" id="salaryWrap"><input type="checkbox" id="txSalary" ' + (t.salary ? "checked" : "") + '> <span><b>This is my salary</b> — start a new budget month on this date</span></label>' +
       '<label class="check" id="rememberWrap"><input type="checkbox" id="txRemember" ' + (t.source === "sms" ? "checked" : "") + '> Always use this category for this merchant</label>' +
       '<button class="btn primary block sticky-save" id="txSave" type="button">' + (isNew ? "Add" : "Save") + '</button>' +
       (isNew ? "" : '<button class="btn danger block" id="txDelete" type="button">Delete</button>') + '</div>';
     openSheet(html, function (el) {
       var catWrap = $("#catWrap", el);
-      function syncType() { catWrap.hidden = state.type !== "expense"; $("#rememberWrap", el).hidden = state.type !== "expense"; $$("#typeSeg button", el).forEach(function (b) { b.classList.toggle("on", b.dataset.type === state.type); }); }
+      function syncType() { catWrap.hidden = state.type !== "expense"; $("#rememberWrap", el).hidden = state.type !== "expense"; $("#salaryWrap", el).hidden = state.type !== "income" || !salaryMode(); $$("#typeSeg button", el).forEach(function (b) { b.classList.toggle("on", b.dataset.type === state.type); }); }
       syncType();
-      $$("#typeSeg button", el).forEach(function (b) { b.onclick = function () { state.type = b.dataset.type; syncType(); }; });
+      var refreshSalary = function () {
+        var box = $("#txSalary", el); if (!box || t.salary) return;
+        var amt = Math.abs(parseAmount($("#txAmount", el).value)) || 0;
+        var guess = looksLikeSalary({ type: "income", amount: amt, merchant: $("#txMerchant", el).value, raw: t.raw || "" });
+        if (box.dataset.touched !== "1") box.checked = guess;
+      };
+      $("#txSalary", el).addEventListener("change", function () { this.dataset.touched = "1"; this.dataset.auto = this.checked ? "" : "off"; });
+      $("#txAmount", el).addEventListener("input", refreshSalary); $("#txMerchant", el).addEventListener("input", refreshSalary);
+      $$("#typeSeg button", el).forEach(function (b) { b.onclick = function () { state.type = b.dataset.type; syncType(); refreshSalary(); }; });
       catWrap.addEventListener("click", function (e) {
         var b = e.target.closest("[data-pick]"); if (!b) return;
         state.catId = b.dataset.pick; $$("[data-pick]", catWrap).forEach(function (x) { x.classList.toggle("on", x === b); x.classList.remove("suggest"); });
@@ -800,7 +908,15 @@
         } else { rec.catId = state.type === "transfer" ? TRANSFER : null; rec.needsReview = false; }
         delete rec.suggest; touch(rec);
         if (!existing) db.transactions.push(rec);
+        var started = false;
+        if (state.type === "income" && salaryMode()) {
+          var box = $("#txSalary", el), wasSalary = !!rec.salary;
+          if (box.checked && !wasSalary) started = maybeStartMonth(rec, true);
+          else if (!box.checked && wasSalary) { undoPayday(rec.date); rec.salary = false; }
+          else if (isNew && !box.checked && box.dataset.auto !== "off") started = maybeStartMonth(rec);
+        }
         closeSheet(); commit();
+        if (started) { announceNewMonth(rec); return; }
         toast(isNew ? "Added " + money(rec.amount, true) + (rec.catId && cat(rec.catId) ? " to " + cat(rec.catId).name : "") : "Saved");
       };
       if (!isNew) $("#txDelete", el).onclick = function () {
@@ -1147,7 +1263,11 @@
             else db.categories.push(touch({ id: uid(), name: it.name, emoji: emojiFor(it.name + " " + it.group), budget: it.budget, group: it.group || "Expenses", keywords: it.keywords, kind: guessKind(it.name + " " + it.group), fixed: fixed, order: base + i }));
           });
           var incTotal = det.incomeItems.filter(function (i) { return i.on; }).reduce(function (a, i) { return a + i.amount; }, 0);
-          if (incTotal) { db.settings.income = Math.round(incTotal * 100) / 100; touch(db.settings); }
+          if (incTotal) {
+            db.settings.income = Math.round(incTotal * 100) / 100;
+            if (!db.settings.salaryWords) db.settings.salaryWords = det.incomeItems.filter(function (i) { return i.on && i.amount >= incTotal * 0.3; }).map(function (i) { return i.name; }).join(", ");
+            touch(db.settings);
+          }
           local.onboarded = true; saveLocal();
           closeSheet(); ui.tab = "home"; commit(); toast("Imported " + chosen.length + " categories" + (incTotal ? " · income " + money(incTotal) : "") + " ✓");
         };
@@ -1254,7 +1374,7 @@
   function mergeDocs(a, b) {
     var out = blankDb();
     out.settings = (b.settings && (b.settings.updatedAt || 0) > (a.settings.updatedAt || 0)) ? b.settings : a.settings;
-    ["categories", "transactions", "rules", "unread"].forEach(function (k) {
+    ["categories", "transactions", "rules", "unread", "paydays"].forEach(function (k) {
       var map = {};
       (a[k] || []).concat(b[k] || []).forEach(function (r) { var ex = map[r.id]; if (!ex || (r.updatedAt || 0) > (ex.updatedAt || 0)) map[r.id] = r; });
       out[k] = Object.keys(map).map(function (id) { return map[id]; });
@@ -1269,7 +1389,7 @@
   function syncNow(manual) {
     if (!local.syncCode || !local.syncUrl || syncing) return Promise.resolve();
     syncing = true; syncState = "busy"; renderSyncState();
-    var before = JSON.stringify(db), added = 0, acks = [];
+    var before = JSON.stringify(db), added = 0, acks = [], newMonthTx = null;
     return api("/v1/pull", { code: local.syncCode }).then(function (res) {
       return decryptDoc(res.doc).then(function (remote) {
         var remoteStr = remote ? JSON.stringify(remote) : "";
@@ -1277,6 +1397,7 @@
         (res.inbox || []).forEach(function (it) {
           var r = ingestSms(it.text, it.at);
           if (r.ok) added++;
+          if (r.newMonth) newMonthTx = r.tx;
           else if (!r.dup) keepUnread(it.text, it.at, r.reason);
           acks.push(it.id);
         });
@@ -1288,7 +1409,8 @@
     }).then(function () {
       local.lastSync = now(); saveLocal(); syncState = "ok";
       if (JSON.stringify(db) !== before) render();
-      if (added) { var q = reviewQueue().length; toast("📩 " + added + " new from your bank" + (q ? " · " + q + " to sort" : ""), q ? "Sort" : null, q ? reviewSheet : null); }
+      if (newMonthTx) announceNewMonth(newMonthTx);
+      else if (added) { var q = reviewQueue().length; toast("📩 " + added + " new from your bank" + (q ? " · " + q + " to sort" : ""), q ? "Sort" : null, q ? reviewSheet : null); }
       else if (manual) toast("Synced ✓");
     }).catch(function (e) {
       syncState = "err"; if (manual) toast("Sync failed: " + (e.message || e).toString().slice(0, 80));
@@ -1456,6 +1578,8 @@
     if (e.target.closest("[data-close]")) { closeSheet(); return; }
     var cp = e.target.closest("[data-copy]");
     if (cp) { var v = cp.dataset.copy; (navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject()).then(function () { toast("Copied"); }, function () { window.prompt && window.prompt("Copy this:", v); }); return; }
+    var cy = e.target.closest("[data-cycle]");
+    if (cy) { db.settings.cycle = cy.dataset.cycle; touch(db.settings); ui.offset = 0; commit(); return; }
     var th = e.target.closest("[data-theme-v]");
     if (th) { local.theme = th.dataset.themeV; saveLocal(); render(); return; }
     var a = e.target.closest("[data-act]"); if (!a) return;
@@ -1467,6 +1591,9 @@
       case "tx": if (!e.target.closest("#sheet")) txSheet(db.transactions.filter(function (t) { return t.id === id; })[0]); break;
       case "review": reviewSheet(); break;
       case "unread": unreadSheet(); break;
+      case "ack-payday": var lp1 = latestPayday(); if (lp1) { local.ackPayday = lp1.id; saveLocal(); } render(); break;
+      case "undo-payday": undoPayday(a.dataset.date); commit(); toast("Okay — that payment no longer starts a month"); break;
+      case "del-payday": undoPayday(a.dataset.date); commit(); break;
       case "sms-test": smsTest(a); break;
       case "filter": ui.actFilter = a.dataset.f; render(); break;
       case "pick-file": $("#fileInput").click(); break;
@@ -1508,8 +1635,10 @@
           }).join("") || '<span class="faint">Paste something first.</span>';
         } else {
           var ok = 0, msgs = [];
-          lines.forEach(function (l) { var r = ingestSms(l, null); if (r.ok) ok++; else msgs.push(r.reason); });
+          var nm = null;
+          lines.forEach(function (l) { var r = ingestSms(l, null); if (r.ok) ok++; else msgs.push(r.reason); if (r.newMonth) nm = r.tx; });
           commit();
+          if (nm) { announceNewMonth(nm); return; }
           toast(ok ? "Added " + ok + " transaction" + (ok > 1 ? "s" : "") : (msgs[0] || "Nothing added"));
           if (reviewQueue().length && ok) setTimeout(reviewSheet, 400);
         }
@@ -1526,6 +1655,7 @@
     var t = e.target;
     if (t.id === "incomeInput") { db.settings.income = Math.abs(parseAmount(t.value)) || 0; touch(db.settings); commit(); }
     if (t.id === "startDay") { db.settings.startDay = +t.value; touch(db.settings); ui.offset = 0; commit(); }
+    if (t.id === "salaryWords") { db.settings.salaryWords = t.value.trim(); touch(db.settings); commit(); }
     if (t.id === "currency") { db.settings.currency = t.value; touch(db.settings); commit(); }
     if (t.id === "simpleToggle") { local.simple = t.checked; saveLocal(); render(); }
   });
@@ -1577,5 +1707,5 @@
   syncNow();
 
   // exposed for testing in the console
-  window.Budgie = { handleFile: handleFile, parseSms: parseSms, detectBudget: detectBudget, categorise: categorise, merchantKey: merchantKey, get db() { return db; } };
+  window.Budgie = { period: period, ingestSms: ingestSms, handleFile: handleFile, parseSms: parseSms, detectBudget: detectBudget, categorise: categorise, merchantKey: merchantKey, get db() { return db; } };
 })();
