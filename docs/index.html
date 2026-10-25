@@ -251,6 +251,7 @@
   .tile{background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:13px 14px; box-shadow:var(--shadow);}
   .tile .v{font-size:1.35em; font-weight:800; letter-spacing:-.02em; margin:2px 0;}
   .tile .d{font-size:.76em; color:var(--ink-faint);}
+  .tiles.three .tile{padding:10px;} .tiles.three .v{font-size:1.02em; white-space:nowrap;} .tiles.three .d{display:none;}
   .delta-up{color:var(--over-ink); font-weight:700;} .delta-down{color:var(--good-ink); font-weight:700;}
   .chart{position:relative; width:100%;}
   .chart svg{display:block; width:100%; height:auto; overflow:visible;}
@@ -333,6 +334,47 @@
   #installBanner p{margin:0; font-size:.82em; opacity:.85; line-height:1.5;}
   #installBanner .close{background:none; border:none; color:inherit; opacity:.8; font-size:22px; width:44px; height:44px; margin:-10px -6px -10px -4px; flex-shrink:0;}
 
+  /* ---------- Statement import ---------- */
+  .st-list{max-height:44dvh; overflow:auto; margin:0 -4px; border-top:1px solid var(--line);}
+  .st-row{display:flex; align-items:center; gap:10px; padding:8px 4px; border-bottom:1px solid var(--line); font-size:.86em;}
+  .st-row.off{opacity:.45;}
+  .st-row input{width:20px; height:20px; accent-color:var(--accent); flex-shrink:0;}
+  .st-row .d{width:48px; flex-shrink:0; color:var(--ink-faint); font-size:.9em;}
+  .st-row .m{flex:1; min-width:0; display:flex; flex-direction:column;}
+  .st-row .m b{font-weight:640; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .st-row .m span{font-size:.85em; color:var(--ink-faint);}
+  .st-row .a{font-weight:700; white-space:nowrap;} .st-row .a.in{color:var(--good-ink);}
+  /* ---------- Suggestions ---------- */
+  .sug{border:1px solid var(--line); border-radius:14px; padding:11px 12px; margin-bottom:8px; background:var(--surface);}
+  .sug.off{opacity:.55;}
+  .sug-top{display:flex; justify-content:space-between; align-items:center; gap:8px;}
+  .toggle{display:flex; align-items:center; gap:6px; font-size:.78em; font-weight:700; color:var(--accent-strong);}
+  .toggle input{width:20px; height:20px; accent-color:var(--accent);}
+  .recap-card{background:linear-gradient(135deg,#0f5c55,#2a78d6); color:#fff; border:none;}
+  /* ---------- Recap story ---------- */
+  #story{position:fixed; inset:0; z-index:90; color:#fff; display:flex; flex-direction:column; padding:calc(14px + var(--safe-t)) 22px calc(24px + var(--safe-b)); overflow:hidden; transition:background .4s;}
+  .st-bars{display:flex; gap:4px; max-width:520px; width:100%; margin:0 auto;}
+  .st-bars i{flex:1; height:3px; border-radius:2px; background:rgba(255,255,255,.3); overflow:hidden;}
+  .st-bars i b{display:block; height:100%; width:0; background:#fff;}
+  .st-bars i.done b{width:100%;}
+  .st-bars i.now b{animation:stfill 7s linear forwards;}
+  @keyframes stfill{to{width:100%}}
+  .st-close{position:absolute; top:calc(26px + var(--safe-t)); right:14px; color:#fff; z-index:3; background:rgba(0,0,0,.15);}
+  .st-body{flex:1; display:flex; flex-direction:column; justify-content:center; max-width:520px; width:100%; margin:0 auto; gap:10px; position:relative; z-index:2; pointer-events:none; animation:up .35s;}
+  .st-body button, .st-body .st-actions{pointer-events:auto;}
+  .st-body h1{font-size:2em; line-height:1.15; margin:0; letter-spacing:-.02em;}
+  .st-body p{margin:0; font-size:1.05em; opacity:.92;}
+  .st-eyebrow{text-transform:uppercase; letter-spacing:.12em; font-size:.72em; font-weight:800; opacity:.8;}
+  .st-big{font-size:64px; line-height:1;}
+  .st-small{font-size:.85em !important; opacity:.8 !important;}
+  .st-score{display:flex; align-items:baseline; gap:8px; margin-top:8px;} .st-score b{font-size:3.2em; font-weight:800;} .st-score span{opacity:.85;}
+  .st-rank{display:flex; align-items:center; gap:12px; background:rgba(255,255,255,.14); border-radius:14px; padding:12px 14px;}
+  .st-rank span{font-weight:800; opacity:.8; width:18px;} .st-rank b{flex:1;} .st-rank em{font-style:normal; font-weight:800;}
+  .st-stack{display:flex; height:14px; border-radius:7px; overflow:hidden; gap:2px; margin-top:8px;}
+  .st-card{background:rgba(255,255,255,.14); border-radius:16px; padding:14px 16px;} .st-card div{font-size:.8em; opacity:.85;} .st-card b{display:block; font-size:1.3em; margin:2px 0;}
+  .st-pair{display:flex; gap:10px; flex-wrap:wrap;} .st-pair div{flex:1; min-width:140px; background:rgba(255,255,255,.14); border-radius:16px; padding:14px;} .st-pair b{display:block; font-size:1.5em;} .st-pair span{font-size:.82em; opacity:.85;}
+  .st-actions{display:flex; flex-direction:column; gap:8px; margin-top:14px;}
+  .st-tap{position:absolute; top:60px; bottom:0; z-index:1;} .st-prev{left:0; width:35%;} .st-next{right:0; width:65%;}
   body.simple .simple-hide{display:none !important;}
   body.simple .hero .big{font-size:2.8em;}
   body.simple .bar{height:14px;}
@@ -397,7 +439,8 @@
 <div id="sheetWrap" hidden><div class="backdrop" data-close></div><div id="sheet" role="dialog" aria-modal="true"></div></div>
 <div id="toast" hidden></div>
 <div id="dropOverlay" hidden><div>📄 Drop your budget spreadsheet</div></div>
-<input type="file" id="fileInput" accept=".xlsx,.xls,.csv,.ods,.numbers" hidden>
+<input type="file" id="fileInput" accept=".xlsx,.xls,.csv,.ods,.numbers,.pdf" hidden>
+<div id="story" hidden role="dialog" aria-label="Month recap"></div>
 <input type="file" id="backupInput" accept=".json,application/json" hidden>
 
 <div id="installBanner" hidden>

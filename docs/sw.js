@@ -1,4 +1,4 @@
-const CACHE = "budgie-v7"; // bump to force clients to refetch
+const CACHE = "budgie-v8"; // bump to force clients to refetch
 const SHELL = ["./", "./index.html", "./app.js", "./manifest.json", "./icons/icon-192.png", "./icons/icon-512.png", "./icons/apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {

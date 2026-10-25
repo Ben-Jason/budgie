@@ -74,7 +74,7 @@
     return {
       v: 1,
       settings: { currency: "ZAR", startDay: 1, income: 0, cycle: "salary", salaryWords: "", updatedAt: 0 },
-      categories: [], transactions: [], rules: [], unread: [], paydays: [], pending: []
+      categories: [], transactions: [], rules: [], unread: [], paydays: [], pending: [], history: []
     };
   }
   function load() {
@@ -213,12 +213,18 @@
   function pendingBudget() { return (db.pending || []).filter(function (x) { return !x.deleted && !x.applied; })[0] || null; }
   function shortDay(d) { return d.toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short" }); }
 
+  // Categories you created in the app, or used in the last two months, survive "Replace all".
+  function keepOnReplace(c) {
+    if (c.source === "app") return true;
+    var from = period(-1).s;
+    return txs().some(function (t) { return t.catId === c.id && t.date >= from; });
+  }
   // Writes a budget (from a sheet) into the categories.
   function applyBudget(items, incomeItems, mode) {
     var chosen = items.filter(function (i) { return i.on && i.name; });
     if (mode === "replace") {
       var names = chosen.map(function (i) { return i.name.toLowerCase(); });
-      cats().forEach(function (c) { if (names.indexOf(c.name.toLowerCase()) < 0) { c.deleted = true; touch(c); txs().forEach(function (t) { if (t.catId === c.id) { t.catId = null; t.needsReview = true; touch(t); } }); } });
+      cats().forEach(function (c) { if (names.indexOf(c.name.toLowerCase()) < 0 && !keepOnReplace(c)) { c.deleted = true; touch(c); txs().forEach(function (t) { if (t.catId === c.id) { t.catId = null; t.needsReview = true; touch(t); } }); } });
     }
     var base = cats().length;
     chosen.forEach(function (it, i) {
@@ -235,16 +241,17 @@
     }
     return { count: chosen.length, income: incTotal };
   }
-  function scheduleBudget(items, incomeItems, mode, fname) {
+  function scheduleBudget(items, incomeItems, mode, fname, extra) {
     (db.pending || []).forEach(function (x) { if (!x.deleted && !x.applied) { x.deleted = true; touch(x); } });
     db.pending = db.pending || [];
-    db.pending.push(touch({ id: "pb_" + uid(), items: items, incomeItems: incomeItems, mode: mode, fname: fname, afterStart: period(0).s, total: items.filter(function (i) { return i.on; }).reduce(function (a, i) { return a + i.budget; }, 0) }));
+    db.pending.push(touch({ id: "pb_" + uid(), items: items, incomeItems: incomeItems, mode: mode, fname: fname, afterStart: period(0).s, income: extra && extra.income != null ? extra.income : null, total: items.filter(function (i) { return i.on; }).reduce(function (a, i) { return a + i.budget; }, 0) }));
   }
   // A scheduled budget switches on as soon as a new budget month has begun.
   function applyPendingIfDue() {
     var pb = pendingBudget();
     if (!pb || period(0).s <= pb.afterStart) return null;
     var r = applyBudget(pb.items, pb.incomeItems, pb.mode);
+    if (pb.income != null && pb.income !== (+db.settings.income || 0)) { db.settings.income = pb.income; touch(db.settings); }
     pb.applied = true; pb.appliedFor = period(0).s; touch(pb);
     return { pb: pb, r: r };
   }
@@ -255,6 +262,30 @@
   }
 
   function inPeriod(t, p) { return t.date >= p.s && t.date <= p.e; }
+  // Each month's budget is snapshotted while it's the current month, so past
+  // months keep the budget that applied then (recap + suggestions rely on it).
+  function histFor(p) {
+    if (!p || p.current || p.offset >= 0) return null;
+    return (db.history || []).filter(function (h) { return !h.deleted && h.id === "h_" + p.s; })[0] || null;
+  }
+  function budgetFor(c, p) {
+    var h = histFor(p);
+    if (h && h.budgets) return h.budgets[c.id] != null ? +h.budgets[c.id] : 0;
+    return +c.budget || 0;
+  }
+  function incomeFor(p) { var h = histFor(p); return h && h.income != null ? +h.income : +db.settings.income || 0; }
+  function snapshotBudgets() {
+    if (!cats().length) return false;
+    var p = period(0), b = {};
+    cats().forEach(function (c) { b[c.id] = +c.budget || 0; });
+    var inc = +db.settings.income || 0, id = "h_" + p.s;
+    db.history = db.history || [];
+    var h = db.history.filter(function (x) { return x.id === id; })[0];
+    if (h && !h.deleted && JSON.stringify(h.budgets) === JSON.stringify(b) && h.income === inc) return false;
+    if (h) { h.budgets = b; h.income = inc; h.deleted = false; touch(h); }
+    else db.history.push(touch({ id: id, start: p.s, budgets: b, income: inc }));
+    return true;
+  }
   function stats(p) {
     var list = txs().filter(function (t) { return inPeriod(t, p); });
     var by = {}, spent = 0, income = 0, uncategorised = 0;
@@ -265,7 +296,7 @@
       if (t.catId && cat(t.catId)) by[t.catId] = (by[t.catId] || 0) + t.amount;
       else uncategorised += t.amount;
     });
-    var budget = cats().reduce(function (s, c) { return s + (+c.budget || 0); }, 0);
+    var budget = cats().reduce(function (s, c) { return s + budgetFor(c, p); }, 0);
     return { list: list, by: by, spent: spent, income: income, uncategorised: uncategorised, budget: budget };
   }
   // Fixed bills (rent, insurance, debit orders) leave in one go, so they
@@ -277,7 +308,7 @@
     return FIXED_KINDS.indexOf(c.kind || guessKind(c.name)) > -1;
   }
   function expectedByNow(c, spent, p) {
-    var b = +c.budget || 0;
+    var b = budgetFor(c, p);
     if (!p.current) return p.offset < 0 ? b : 0;
     return isFixed(c) ? Math.min(spent, b) : b * p.elapsed / p.days;
   }
@@ -299,29 +330,39 @@
   var KINDS = {
     housing: { e: "🏠", syn: ["rent", "bond", "erf", "housing", "home loan", "levy", "levies", "mortgage", "accommodation"], m: ["rent", "bond", "home loan", "levy", "levies", "body corporate", "property"] },
     groceries: { e: "🛒", syn: ["grocer", "food", "supermarket", "household", "kos ", "kos"], m: ["checkers", "shoprite", "pick n pay", "picknpay", "pnp", "woolworths", "woolies", "spar", "food lover", "usave", "boxer", "makro", "sixty60", "ok foods", "fruit & veg", "fruit and veg", "president hyper", "cambridge food", "superspar", "kwikspar", "food store", "butcher"] },
-    eating: { e: "🍔", syn: ["eating", "uiteet", "koffie", "kuier", "restaurant", "takeaway", "take-away", "take away", "dining", "eat out", "coffee", "fast food", "meals out"], m: ["kfc", "mcdonald", "mcd ", "nando", "steers", "wimpy", "spur", "debonair", "roman", "ocean basket", "mugg", "vida e", "starbucks", "uber eats", "ubereats", "mr d", "mrd", "burger king", "pizza", "restaurant", "cafe", "coffee", "bakery", "tasha", "fishaways", "chicken licken", "galito", "rocomamas", "panarottis", "john dory", "seattle", "bootlegger", "kauai", "sushi", "grill", "bistro", "doppio", "col'cacchio", "mugg & bean", "mugg&bean"] },
+    eating: { e: "🍔", syn: ["eating", "uiteet", "kuier", "restaurant", "takeaway", "take-away", "take away", "dining", "eat out", "fast food", "meals out"], m: ["kfc", "mcdonald", "mcd ", "nando", "steers", "wimpy", "spur", "debonair", "roman", "ocean basket", "mugg", "vida e", "starbucks", "uber eats", "ubereats", "mr d", "mrd", "burger king", "pizza", "restaurant", "cafe", "coffee", "bakery", "tasha", "fishaways", "chicken licken", "galito", "rocomamas", "panarottis", "john dory", "seattle", "bootlegger", "kauai", "sushi", "grill", "bistro", "doppio", "col'cacchio", "mugg & bean", "mugg&bean"] },
     fuel: { e: "⛽", syn: ["fuel", "petrol", "diesel", "gas"], m: ["engen", "shell", "bp ", "sasol", "caltex", "totalenergies", "total ", "astron", "fuel", "garage", "puma energy", "petroport"] },
-    transport: { e: "🚕", syn: ["transport", "travel", "uber", "taxi", "commute", "parking", "toll"], m: ["uber", "bolt", "gautrain", "taxi", "toll", "sanral", "parking", "e-toll", "myciti", "metrorail", "flysafair", "airlink", "lift airline", "kulula", "intercape", "greyhound"] },
-    car: { e: "🚗", syn: ["car ", "car", "vehicle", "auto", "maintenance", "tracker", "motor"], m: ["wesbank", "mfc", "vehicle finance", "tiger wheel", "supa quick", "midas", "autozone", "goldwagen", "car wash", "licence", "license renewal", "dekra"] },
-    utilities: { e: "💡", syn: ["electric", "water", "ligte", "krag", "utilit", "municipal", "rates", "power"], m: ["eskom", "city of", "municipality", "prepaid elec", "electricity", "city power", "water", "rates", "lightstone", "ekurhuleni", "tshwane", "joburg", "cape town"] },
+    transport: { e: "🚕", syn: ["transport", "travel", "commute", "toll"], m: ["uber", "bolt", "gautrain", "taxi", "toll", "sanral", "parking", "e-toll", "myciti", "metrorail", "flysafair", "airlink", "lift airline", "kulula", "intercape", "greyhound"] },
+    car: { e: "🚗", syn: ["car ", "car", "vehicle", "auto", "maintenance", "tracker", "motor"], m: ["carwash", "car wash", "tracker", "netstar", "cartrack", "wesbank", "mfc", "vehicle finance", "tiger wheel", "supa quick", "midas", "autozone", "goldwagen", "car wash", "licence", "license renewal", "dekra"] },
+    utilities: { e: "💡", syn: ["electric", "water", "ligte", "krag", "utilit", "municipal", "rates", "power"], m: ["eskom", "city of", "municipality", "prepaid elec", "electricity", "city power", "water", "rates", "lightstone", "ekurhuleni", "tshwane", "city of joburg", "city of cape town", "municipal"] },
     phone: { e: "📱", syn: ["phone", "cell", "internet", "wifi", "data", "airtime", "mobile", "fibre"], m: ["vodacom", "mtn", "cell c", "telkom", "rain", "afrihost", "webafrica", "airtime", "data bundle", "vumatel", "openserve", "coolideas", "mweb", "herotel", "frogfoot"] },
-    insurance: { e: "🛡️", syn: ["insurance", "cover", "assurance", "funeral", "pps", "naked", "outsurance"], m: ["insurance", "outsurance", "santam", "old mutual", "sanlam", "liberty", "discovery life", "momentum", "king price", "miway", "hollard", "budget ins", "1life", "first for women", "dial direct", "auto & general", "clientele", "avbob", "assupol"] },
-    medical: { e: "💊", syn: ["medical", "health", "pharmacy", "doctor", "medicine", "aid"], m: ["dis-chem", "dischem", "clicks", "pharmacy", "doctor", "dr ", "medical", "hospital", "netcare", "mediclinic", "life healthcare", "discovery health", "bonitas", "gems", "fedhealth", "bestmed", "medshield", "dentist", "optometrist", "spec-savers", "specsavers", "pathcare", "lancet"] },
-    subscriptions: { e: "📺", syn: ["subscription", "streaming", "netflix", "apps", "software", "tv"], m: ["netflix", "showmax", "shomax", "apple music", "covenant eyes", "spotify", "apple.com", "itunes", "google", "youtube", "dstv", "multichoice", "disney", "prime video", "amazon prime", "icloud", "microsoft", "openai", "chatgpt", "anthropic", "claude.ai", "adobe", "deezer", "playstation plus", "xbox game pass", "canva"] },
+    insurance: { e: "🛡️", syn: ["insurance", "cover", "assurance", "funeral", "pps", "naked", "outsurance"], m: ["naked insurance", "kingprice", "pps", "insurance", "outsurance", "santam", "old mutual", "sanlam", "liberty", "discovery life", "momentum", "king price", "miway", "hollard", "budget ins", "1life", "first for women", "dial direct", "auto & general", "clientele", "avbob", "assupol"] },
+    medical: { e: "💊", syn: ["medical", "health", "pharmacy", "doctor", "medicine", "aid"], m: ["radiology", "dentist", "dentistry", "unicare", "medirite", "physio", "dis-chem", "dischem", "clicks", "pharmacy", "doctor", "dr ", "medical", "hospital", "netcare", "mediclinic", "life healthcare", "discovery health", "bonitas", "gems", "fedhealth", "bestmed", "medshield", "dentist", "optometrist", "spec-savers", "specsavers", "pathcare", "lancet"] },
+    subscriptions: { e: "📺", syn: ["subscription", "streaming", "netflix", "apps", "software", "tv"], m: ["render.com", "vercel", "github", "netlify", "google one", "netflix", "showmax", "shomax", "apple music", "covenant eyes", "spotify", "apple.com", "itunes", "google", "youtube", "dstv", "multichoice", "disney", "prime video", "amazon prime", "icloud", "microsoft", "openai", "chatgpt", "anthropic", "claude.ai", "adobe", "deezer", "playstation plus", "xbox game pass", "canva"] },
     shopping: { e: "🛍️", syn: ["shopping", "klere", "aankope", "clothes", "clothing", "personal", "fashion", "household items"], m: ["takealot", "superbalist", "mr price", "mrp", "ackermans", "pep ", "pepstores", "edgars", "foschini", "truworths", "h&m", "cotton on", "game ", "builders", "incredible connection", "amazon", "shein", "temu", "sportscene", "totalsports", "cna", "exclusive books", "markham", "jet ", "identity", "woolworths clothing", "zara", "bash", "makro", "hifi corp", "istore", "dion wired", "loot", "yuppiechef", "mr price home", "sheet street", "@home", "decofurn", "leroy merlin", "cashbuild", "mica"] },
     entertainment: { e: "🎉", syn: ["entertainment", "events", "fun", "leisure", "hobbies", "going out", "social"], m: ["ster-kinekor", "ster kinekor", "nu metro", "computicket", "ticketpro", "quicket", "howler", "steam", "playstation", "xbox", "bowling", "tops", "liquor", "bottle store", "pub", "bar ", "tavern", "casino"] },
     personal: { e: "💇", syn: ["personal care", "beauty", "hair", "grooming", "toiletries"], m: ["salon", "barber", "hair", "nails", "spa", "beauty"] },
     fitness: { e: "🏋️", syn: ["gym", "fitness", "sport", "exercise", "training", "trainer", "personal training"], m: ["virgin active", "planet fitness", "gym", "crossfit", "parkrun", "strava", "zwift", "sweat1000"] },
     education: { e: "🎓", syn: ["education", "school", "study", "fees", "tuition", "kids"], m: ["school", "university", "unisa", "varsity", "college", "tuition", "udemy", "coursera"] },
     savings: { e: "🏦", syn: ["saving", "invest", "emergency", "retirement", "tfsa", "goal"], m: ["savings", "invest", "easyequities", "easy equities", "satrix", "tfsa", "allan gray", "coronation", "10x", "sygnia", "etfsa", "retirement annuity"] },
-    giving: { e: "🎁", syn: ["gift", "giving", "donation", "charity", "church", "tithe"], m: ["church", "tithe", "donation", "givengain", "backabuddy", "charity"] },
+    giving: { e: "🎁", syn: ["gift", "giving", "donation", "charity", "church", "tithe"], m: ["tiende", "dankoffer", "offering", "church", "tithe", "donation", "givengain", "backabuddy", "charity"] },
     pets: { e: "🐾", syn: ["pet", "dog", "cat", "vet"], m: ["vet", "pet", "petshop", "petworld", "absolute pets", "montana pet"] },
     fees: { e: "🏧", syn: ["bankfees", "bank fees", "bankfee", "bank fee", "fees", "charges", "bank charges", "interest"], m: ["fee", "service charge", "monthly acc", "admin charge", "interest charged", "sms notif", "cash dep fee"] },
     cash: { e: "💵", syn: ["cash", "atm", "withdrawal"], m: ["atm", "cash withdrawal", "cash wd", "withdrawal", "cash send"] },
+    coffee: { e: "☕", parent: "eating", syn: ["koffie", "coffee"], m: ["vida e", "seattle", "mugg & bean", "mugg&bean", "starbucks", "merkava", "coffeeworks", "coffee", "caffe", "bootleggers", "grounds", "doppio", "seattle coffee", "kauai"] },
+    parking: { e: "🅿️", parent: "transport", syn: ["parking"], m: ["parking", "prime park", "parkade", "wilson parking", "v a waterfront"] },
+    rideshare: { e: "🚕", parent: "transport", syn: ["uber", "bolt", "taxi"], m: ["uber", "bolt", "taxify", "didi"] },
     family: { e: "👪", syn: ["pappa", "mamma", "family", "parents", "mom", "dad", "ouers"], m: [] },
     home: { e: "🧹", syn: ["housekeeping", "domestic", "cleaning", "huishou"], m: [] },
     debt: { e: "💳", syn: ["debt", "loan", "credit card", "repayment", "store card"], m: ["loan", "credit card", "repayment", "store card", "personal loan", "edgars account", "truworths account"] }
   };
+  // "fee" must not match "coffee", "spa" not "spar", "pet" not "petrol"
+  var KW_CACHE = {};
+  function kwIn(text, m) {
+    var k = m.trim(); if (!k) return false;
+    var re = KW_CACHE[k] || (KW_CACHE[k] = new RegExp("(^|[^a-z])" + k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + (k.length <= 4 ? "([^a-z]|$)" : "")));
+    return re.test(text);
+  }
   function guessKind(name) {
     var n = " " + String(name || "").toLowerCase() + " ";
     var best = null, bestLen = 0;
@@ -369,25 +410,40 @@
     });
     if (kwHits.length === 1) return { catId: kwHits[0].id, confidence: 0.92, suggest: [kwHits[0].id], reason: "Matches your keyword" };
     // a category called "Netflix" or "King Price" catches that merchant
+    var mCompact = merch.replace(/[^a-z]/g, ""), mFirst = (merch.trim().split(/\s+/)[0] || "").replace(/[^a-z]/g, "");
     var nameHits = all.filter(function (c) {
-      var n = cleanName(c.name).toLowerCase(); if (n.length < 4) return false;
-      return new RegExp("(^|[^a-z])" + n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "([^a-z]|$)").test(merch);
+      var n = cleanName(c.name).toLowerCase(); if (n.length < 3) return false;
+      if (new RegExp("(^|[^a-z])" + n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "([^a-z]|$)").test(merch)) return true;
+      var nc = n.replace(/[^a-z]/g, "");
+      if (nc.length >= 6 && mCompact.indexOf(nc) > -1) return true;                      // "kingprice" ~ "King Price"
+      return mFirst.length >= 4 && nc.length >= 6 && nc.indexOf(mFirst) === 0 && !isFinite(mFirst); // "disc" ~ "Discovery"
     });
     if (nameHits.length === 1) return { catId: nameHits[0].id, confidence: 0.9, suggest: [nameHits[0].id], reason: "Matches your “" + nameHits[0].name + "” category" };
     // 3. built-in merchant knowledge, mapped onto your category names
     var kinds = [];
     Object.keys(KINDS).forEach(function (k) {
-      if (KINDS[k].m.some(function (m) { return merch.indexOf(m) > -1; })) kinds.push(k);
+      if (KINDS[k].m.some(function (m) { return kwIn(merch, m); })) kinds.push(k);
     });
     if (!kinds.length && tx.merchant) {
-      Object.keys(KINDS).forEach(function (k) { if (KINDS[k].m.some(function (m) { return m.length > 3 && hay.indexOf(m) > -1; })) kinds.push(k); });
+      Object.keys(KINDS).forEach(function (k) { if (KINDS[k].m.some(function (m) { return m.trim().length > 3 && kwIn(hay, m); })) kinds.push(k); });
     }
+    var kindOf = function (c) { return guessKind(c.name + " " + (c.group || "")) || c.kind; };
+    var subs = kinds.filter(function (k) { return KINDS[k].parent; });
+    // a specific sub-kind (coffee, parking, uber) beats its parent when you have that category
+    kinds = kinds.filter(function (k) { return !subs.some(function (sk) { return KINDS[sk].parent === k && all.some(function (c) { return kindOf(c) === sk; }); }); });
+    kinds = kinds.map(function (k) { return KINDS[k].parent && !all.some(function (c) { return kindOf(c) === k; }) ? KINDS[k].parent : k; })
+      .filter(function (k, i, arr) { return arr.indexOf(k) === i; });
     var cands = [];
     kinds.forEach(function (k) {
-      all.forEach(function (c) { if ((c.kind || guessKind(c.name + " " + (c.group || ""))) === k && cands.indexOf(c.id) < 0) cands.push(c.id); });
+      all.forEach(function (c) { if (kindOf(c) === k && cands.indexOf(c.id) < 0) cands.push(c.id); });
     });
+    // several categories of the same kind: one whose name appears in the description wins
+    if (cands.length > 1) {
+      var named = cands.filter(function (id) { var c = cat(id); return cleanName(c.name).toLowerCase().split(/\s+/).some(function (w) { return w.length >= 4 && kwIn(hay, w); }); });
+      if (named.length === 1) cands = named;
+    }
     kwHits.forEach(function (c) { if (cands.indexOf(c.id) < 0) cands.unshift(c.id); });
-    if (cands.length === 1 && kinds.length === 1) return { catId: cands[0], confidence: 0.82, suggest: cands, reason: "Looks like " + kinds[0] };
+    if (cands.length === 1) return { catId: cands[0], confidence: 0.82, suggest: cands, reason: "Looks like " + kinds[0] };
     // Uncertain: suggest the candidates, then your most-used categories
     var freq = {};
     txs().forEach(function (t) { if (t.catId) freq[t.catId] = (freq[t.catId] || 0) + 1; });
@@ -476,13 +532,39 @@
     BANKS.some(function (b) { if (low.indexOf(b[0]) > -1) { bank = b[1]; return true; } return false; });
     return { amount: Math.round(amt.v * 100) / 100, type: type, merchant: merchant, date: d ? iso(d) : null, bank: bank, reserved: /reserved/.test(low) };
   }
-  // Messages we couldn't turn into a transaction are kept so nothing is lost silently.
+  // Messages we couldn't turn into a transaction are kept so nothing is lost silently —
+  // but only if they look like a payment AND no payment arrived at the same moment
+  // (Shortcuts can send a second, partial copy of the same SMS).
+  var TX_WORDS = /\b(purchase[ds]?|pur|paid|payment|pmt|debit(ed)?|withdrawn|withdrawal|spent|deposit(ed)?|received|credited|transfer(red)?|t\/fer|reserved)\b/i;
+  function companionTx(at) {
+    var a = at || now();
+    return txs().some(function (x) { return x.source === "sms" && Math.abs((x.at || x.updatedAt || 0) - a) < 10 * 60 * 1000; });
+  }
+  function noteIgnored(text, reason) {
+    local.ignoredSms = local.ignoredSms || { count: 0 };
+    local.ignoredSms.count++; local.ignoredSms.last = { text: String(text).slice(0, 160), reason: reason || "", at: now() };
+    saveLocal();
+  }
   function keepUnread(text, at, reason) {
     db.unread = db.unread || [];
-    var id = "u_" + hash(text);
-    if (db.unread.some(function (u) { return u.id === id; })) return;
+    var t = String(text || "");
     if (/one-time pin|declined/i.test(reason || "")) return; // genuinely not transactions
-    db.unread.push(touch({ id: id, text: String(text).slice(0, 600), at: at || now(), reason: reason || "" }));
+    if (!TX_WORDS.test(t) || t.length < 20 || companionTx(at)) { noteIgnored(t, reason); return; }
+    var id = "u_" + hash(t);
+    if (db.unread.some(function (u) { return u.id === id; })) return;
+    db.unread.push(touch({ id: id, text: t.slice(0, 600), at: at || now(), reason: reason || "" }));
+  }
+  // Clears old false alarms: retries the parser, drops non-payments and companions.
+  function tidyUnread() {
+    var changed = false;
+    (db.unread || []).forEach(function (u) {
+      if (u.deleted) return;
+      var r = parseSms(u.text);
+      if (!r.error) { var ok = ingestSms(u.text, u.at); if (ok.ok || ok.dup) { u.deleted = true; touch(u); changed = true; } return; }
+      var at = u.at || u.updatedAt || 0;
+      if (!TX_WORDS.test(u.text) || u.text.length < 20 || txs().some(function (x) { return x.source === "sms" && Math.abs((x.at || x.updatedAt || 0) - at) < 10 * 60 * 1000; })) { u.deleted = true; touch(u); changed = true; }
+    });
+    return changed;
   }
   function unreadList() { return (db.unread || []).filter(function (u) { return !u.deleted; }); }
   function titleCase(s) {
@@ -504,7 +586,7 @@
         Math.abs(dayDiff(fromIso(t.date), fromIso(date))) <= 5 && (t.reserved || p.reserved) && t.type === p.type;
     })[0];
     if (twin) return { ok: false, reason: "Same as an earlier reserved amount", dup: true };
-    var tx = touch({ id: id, date: date, amount: p.amount, type: p.type, merchant: p.merchant, note: "", source: "sms", bank: p.bank, raw: String(text).slice(0, 600), reserved: p.reserved });
+    var tx = touch({ id: id, date: date, amount: p.amount, type: p.type, merchant: p.merchant, note: "", source: "sms", bank: p.bank, raw: String(text).slice(0, 600), reserved: p.reserved, at: at || now() });
     if (p.type === "transfer") { tx.catId = TRANSFER; tx.needsReview = false; } else applyCategory(tx);
     if (opts && opts.sample) tx.sample = true;
     db.transactions.push(tx);
@@ -523,6 +605,7 @@
   function render() {
     applyTheme();
     var due = applyPendingIfDue();
+    if (snapshotBudgets()) { persist(); scheduleSync(); }
     if (due) { persist(); scheduleSync(); setTimeout(function () { toast("📄 Your new budget is now active (" + due.r.count + " categories" + (due.pb.fname ? " from " + due.pb.fname : "") + ")"); }, 2600); }
     var p = period(ui.offset);
     $("#monthLabel").textContent = p.label;
@@ -538,10 +621,11 @@
     if (ui.tab === "insights") mountCharts(p);
     if (ui.tab === "budget") mountDrop();
     renderSyncState();
+    maybeAutoRecap();
   }
 
   function catRow(c, spent, p) {
-    var b = +c.budget || 0, fx = isFixed(c), st = paceStatus(spent, b, p, fx);
+    var b = budgetFor(c, p), fx = isFixed(c), st = paceStatus(spent, b, p, fx);
     var pct = b ? clamp(spent / b * 100, 0, 100) : (spent ? 100 : 0);
     var left = b - spent;
     var perDay = p.current && p.left > 0 && left > 0 ? money(left / p.left) + "/day" : "";
@@ -576,9 +660,11 @@
       } else if (until >= 0 && until <= 2 && choice.forDate !== nxIso) {
         h += '<div class="card" style="border-color:var(--accent)"><div class="row" style="align-items:flex-start"><span style="font-size:24px">🗓️</span><div class="spacer"><b>' + (until === 0 ? "Payday is expected today" : "Payday in " + until + " day" + (until > 1 ? "s" : "")) + '</b> <span class="small faint">' + shortDay(nx) + (p.estimated ? " (est.)" : "") + '</span>' +
           '<div class="small muted">Next month will use the same budget (' + money(stats(p).budget) + ') unless you upload a new sheet.</div>' +
-          '<div class="row wrap" style="margin-top:10px"><button class="btn sm primary" data-act="next-keep" data-date="' + nxIso + '" type="button">Keep same budget</button><button class="btn sm" data-act="next-upload" type="button">📄 Upload new sheet</button><button class="btn sm" data-tab="budget" type="button">Edit amounts</button></div></div></div></div>';
+          '<div class="row wrap" style="margin-top:10px"><button class="btn sm primary" data-act="plan" type="button">🧭 Review suggestions</button><button class="btn sm" data-act="next-keep" data-date="' + nxIso + '" type="button">Keep same budget</button><button class="btn sm" data-act="next-upload" type="button">📄 Upload new sheet</button><button class="btn sm" data-tab="budget" type="button">Edit amounts</button></div></div></div></div>';
       }
     }
+    var rpH = p.current && recapPeriod();
+    if (rpH && dayDiff(period(0).start, today()) <= 14 && local.recapHidden !== rpH.s) h += '<div class="card recap-card"><div class="row"><span style="font-size:26px">✨</span><div class="spacer"><b>Your ' + esc(rpH.label) + ' recap is ready</b><div class="small" style="opacity:.85">How the month went, in 60 seconds.</div></div><button class="btn sm" data-act="recap" type="button" style="background:#fff;color:#0f5c55">Watch</button><button class="icon-btn" data-act="recap-hide" type="button" aria-label="Hide" style="color:#fff">' + ICON.close + '</button></div></div>';
     var lp = latestPayday();
     if (p.current && lp && local.ackPayday !== lp.id && dayDiff(fromIso(lp.date), today()) <= 7 && dayDiff(fromIso(lp.date), today()) >= 0) {
       h += '<div class="card" style="background:var(--accent-soft);border-color:transparent"><div class="row" style="align-items:flex-start"><span style="font-size:26px">💰</span><div class="spacer"><b>New budget month started</b>' +
@@ -605,7 +691,7 @@
     h += '</div>';
     var un = unreadList();
     if (un.length) {
-      h += '<button class="review-banner" data-act="unread" type="button" style="background:var(--over-soft);color:var(--over-ink)"><span class="emoji">📩</span><span class="spacer"><b>' + un.length + ' bank message' + (un.length > 1 ? "s" : "") + ' I couldn’t read</b><span class="small">Tap to add ' + (un.length > 1 ? "them" : "it") + ' yourself</span></span>' + ICON.chev + '</button>';
+      h += '<button class="review-banner" data-act="unread" type="button"><span class="emoji">📩</span><span class="spacer"><b>' + un.length + ' bank message' + (un.length > 1 ? "s" : "") + ' to check</b><span class="small">Looks like a payment, but I couldn’t pick out the amount — tap to add or dismiss</span></span>' + ICON.chev + '</button>';
     }
     if (q.length) {
       h += '<button class="review-banner" data-act="review" type="button"><span class="emoji">🤔</span><span class="spacer"><b>' + q.length + ' transaction' + (q.length > 1 ? "s" : "") + ' to sort</b><span class="small">I wasn’t sure which category — tap to help</span></span>' + ICON.chev + '</button>';
@@ -619,7 +705,7 @@
     var gs = groups();
     gs.forEach(function (g) {
       var list = cats().filter(function (c) { return (c.group || "Expenses") === g; });
-      var gSpent = list.reduce(function (a, c) { return a + (s.by[c.id] || 0); }, 0), gBud = list.reduce(function (a, c) { return a + (+c.budget || 0); }, 0);
+      var gSpent = list.reduce(function (a, c) { return a + (s.by[c.id] || 0); }, 0), gBud = list.reduce(function (a, c) { return a + budgetFor(c, p); }, 0);
       h += '<div class="card"><div class="card-h"><h3>' + esc(g) + '</h3><span class="small faint num">' + money(gSpent) + ' / ' + money(gBud) + '</span></div>';
       h += list.map(function (c) { return catRow(c, s.by[c.id] || 0, p); }).join("");
       h += '</div>';
@@ -693,7 +779,8 @@
     var income = s.income || +db.settings.income || 0;
     var saveRate = income ? (income - s.spent) / income : null;
     var vsPrev = prevSame ? (s.spent - prevSame) / prevSame : null;
-    var h = '<div class="tiles four">' +
+    var rpI = recapPeriod();
+    var h = (rpI ? '<button class="btn block" data-act="recap" type="button" style="background:linear-gradient(135deg,#0f5c55,#2a78d6);color:#fff">✨ Watch your ' + esc(rpI.label) + ' recap</button>' : "") + '<div class="tiles four">' +
       tile(p.current ? "Heading for" : "Total spent", money(projected), projected > s.budget && s.budget ? '<span class="delta-up">▲ ' + money(projected - s.budget) + ' over budget</span>' : '<span class="delta-down">▼ ' + money(Math.max(0, s.budget - projected)) + ' under budget</span>') +
       tile(p.current ? "vs this time last month" : "vs last month", vsPrev == null ? "—" : (vsPrev > 0 ? "+" : "") + Math.round(vsPrev * 100) + "%", vsPrev == null ? "No data for last month" : money(s.spent) + " now vs " + money(prevSame)) +
       tile("Savings rate", saveRate == null ? "—" : Math.round(saveRate * 100) + "%", income ? money(income - s.spent) + " of " + money(income) + (s.income ? " income" : " expected") : "Add your income on the Budget tab") +
@@ -703,12 +790,12 @@
     h += '<div class="card"><div class="card-h"><h3>Last 6 months</h3><span class="small faint">bars = spent · line = budget</span></div><div class="chart" id="monthsChart"></div></div>';
     h += '</div><div>';
     // by category
-    var rows = cats().map(function (c) { return { c: c, v: s.by[c.id] || 0, pv: prev.by[c.id] || 0 }; }).sort(function (a, b) { return b.v - a.v; });
-    var max = Math.max.apply(null, rows.map(function (r) { return Math.max(r.v, +r.c.budget || 0); }).concat([1]));
+    var rows = cats().map(function (c) { return { c: c, v: s.by[c.id] || 0, pv: prev.by[c.id] || 0, b: budgetFor(c, p) }; }).sort(function (a, b) { return b.v - a.v; });
+    var max = Math.max.apply(null, rows.map(function (r) { return Math.max(r.v, r.b); }).concat([1]));
     h += '<div class="card"><div class="card-h"><h3>Where it went</h3><span class="small faint">marker = budget</span></div>' +
-      rows.filter(function (r) { return r.v > 0 || r.c.budget; }).map(function (r) {
-        return '<div class="hbar" title="' + esc(r.c.name) + ': ' + money(r.v) + ' of ' + money(r.c.budget) + '"><span class="t">' + esc(r.c.emoji) + ' ' + esc(r.c.name) + '</span><span class="v num">' + money(r.v) + ' <span class="faint" style="font-weight:500">' + (s.spent ? Math.round(r.v / s.spent * 100) + "%" : "") + '</span></span>' +
-          '<span class="track"><span style="width:' + (r.v / max * 100) + '%"></span>' + (r.c.budget ? '<em style="left:' + (r.c.budget / max * 100) + '%"></em>' : "") + '</span></div>';
+      rows.filter(function (r) { return r.v > 0 || r.b; }).map(function (r) {
+        return '<div class="hbar" title="' + esc(r.c.name) + ': ' + money(r.v) + ' of ' + money(r.b) + '"><span class="t">' + esc(r.c.emoji) + ' ' + esc(r.c.name) + '</span><span class="v num">' + money(r.v) + ' <span class="faint" style="font-weight:500">' + (s.spent ? Math.round(r.v / s.spent * 100) + "%" : "") + '</span></span>' +
+          '<span class="track"><span style="width:' + (r.v / max * 100) + '%"></span>' + (r.b ? '<em style="left:' + (r.b / max * 100) + '%"></em>' : "") + '</span></div>';
       }).join("") + '</div>';
     // biggest changes
     var changes = rows.map(function (r) { return { c: r.c, d: r.v - r.pv }; }).filter(function (r) { return Math.abs(r.d) >= 1; }).sort(function (a, b) { return Math.abs(b.d) - Math.abs(a.d); }).slice(0, 5);
@@ -732,7 +819,7 @@
   function projectSpend(p, s) {
     if (!p.current || !p.elapsed) return s.spent;
     var fixed = 0, variable = s.uncategorised;
-    cats().forEach(function (c) { var v = s.by[c.id] || 0; if (isFixed(c)) fixed += Math.max(v, +c.budget || 0); else variable += v; });
+    cats().forEach(function (c) { var v = s.by[c.id] || 0; if (isFixed(c)) fixed += Math.max(v, budgetFor(c, p)); else variable += v; });
     return fixed + variable / p.elapsed * p.days;
   }
   function tile(label, v, d) { return '<div class="tile"><div class="eyebrow">' + label + '</div><div class="v num">' + v + '</div><div class="d">' + d + '</div></div>'; }
@@ -759,7 +846,7 @@
     var shown = p.current ? cur.slice(0, p.elapsed) : cur;
     var W = Math.max(300, el.clientWidth || 560), H = Math.round(clamp(W * 0.5, 190, 260)), L = 46, R = 10, T = 12, B = 26;
     var max = niceMax(Math.max(budget, cur[cur.length - 1] || 0, prev[prev.length - 1] || 0));
-    var fixedBudget = cats().reduce(function (a, c) { return a + (isFixed(c) ? +c.budget || 0 : 0); }, 0);
+    var fixedBudget = cats().reduce(function (a, c) { return a + (isFixed(c) ? budgetFor(c, p) : 0); }, 0);
     var paceAt = function (i) { return fixedBudget + (budget - fixedBudget) * (n === 1 ? 1 : i / (n - 1)); };
     var n = p.days;
     var x = function (i) { return L + (W - L - R) * (n === 1 ? 0 : i / (n - 1)); };
@@ -845,6 +932,9 @@
       '<div class="summary-line"><span class="muted">Budgeted across ' + all.length + ' categories</span><span class="num">− ' + money(total) + '</span></div>' +
       '<div class="summary-line total"><span>' + (inc - total >= 0 ? "Not yet given a job" : "Over-planned by") + '</span><span class="num ' + (inc - total >= 0 ? "delta-down" : "delta-up") + '">' + money(Math.abs(inc - total)) + '</span></div></div>' +
       (inc && inc - total > 0 ? '<p class="small faint" style="margin:8px 0 0">Tip: give every rand a job — put the extra into savings or a goal category.</p>' : "") + '</div>';
+    var nSug = cats().length ? suggestionsFor(planBasis()).length : 0;
+    if (cats().length) h += '<button class="review-banner" data-act="plan" type="button" style="background:var(--accent-soft);color:var(--accent-strong)"><span class="emoji">🧭</span><span class="spacer"><b>Plan next month</b><span class="small">' + (nSug ? nSug + " suggested change" + (nSug > 1 ? "s" : "") + " based on " + esc(planBasis().label) + " — approve or edit" : "Review and adjust any category") + '</span></span>' + ICON.chev + '</button>';
+    h += '<div class="card"><div class="card-h"><h3>🏦 Bank statement</h3></div><p class="small muted" style="margin-top:0">Started mid-month or missed some SMSes? Upload a statement (PDF or CSV) — I’ll add everything from your salary onward, sort it, and skip what’s already here.</p><button class="btn sm primary" data-act="pick-statement" type="button">Upload statement</button></div>';
     h += '<div class="drop" id="dropZone"><div class="emoji">📄</div><b>Drop an Excel or CSV budget here</b><p class="small muted" style="margin:4px 0 12px">Columns like <i>Category</i> and <i>Amount</i>. You’ll get a preview before anything changes.</p>' +
       '<div class="row" style="justify-content:center;gap:8px" ><button class="btn sm primary" data-act="pick-file" type="button">Choose file</button><button class="btn sm" data-act="template" type="button">Get a template</button></div></div>';
     h += '</div><div>';
@@ -1060,7 +1150,7 @@
       if (isNew) setTimeout(function () { nameIn.focus(); }, 250);
       $("#cSave", el).onclick = function () {
         var name = nameIn.value.trim(); if (!name) { toast("Give it a name"); return; }
-        var rec = cat(c.id) || { id: c.id, order: cats().length };
+        var rec = cat(c.id) || { id: c.id, order: cats().length, source: "app", createdAt: now() };
         rec.name = name; rec.emoji = c.emoji; rec.budget = Math.abs(parseAmount($("#cBudget", el).value)) || 0;
         rec.group = $("#cGroup", el).value.trim() || "Expenses"; rec.keywords = $("#cKw", el).value.trim(); rec.kind = guessKind(name + " " + rec.group);
         var autoFixed = isFixed({ name: rec.name, group: rec.group, kind: rec.kind });
@@ -1082,16 +1172,425 @@
   function catDetailSheet(c) {
     var p = period(ui.offset), s = stats(p), spent = s.by[c.id] || 0;
     var list = s.list.filter(function (t) { return t.catId === c.id; }).sort(txSort);
-    var st = paceStatus(spent, c.budget, p, isFixed(c));
+    var cb = budgetFor(c, p), st = paceStatus(spent, cb, p, isFixed(c));
     var html = sheetHead(esc(c.emoji) + " " + esc(c.name), esc(p.label)) +
-      '<div class="tiles" style="margin-bottom:12px">' + tile("Spent", money(spent), '<span class="status ' + st + '">' + STATUS_LABEL[st] + '</span>') + tile(c.budget - spent >= 0 ? "Left" : "Over", money(Math.abs(c.budget - spent)), "of " + money(c.budget) + " budget") + '</div>' +
-      '<div class="bar ' + st + '" style="margin-bottom:14px"><span class="fill" style="width:' + (c.budget ? clamp(spent / c.budget * 100, 0, 100) : 0) + '%"></span>' + (p.current && !isFixed(c) ? '<span class="pace" style="left:calc(' + (p.elapsed / p.days * 100) + '% - 1px)"></span>' : "") + '</div>' +
+      '<div class="tiles" style="margin-bottom:12px">' + tile("Spent", money(spent), '<span class="status ' + st + '">' + STATUS_LABEL[st] + '</span>') + tile(cb - spent >= 0 ? "Left" : "Over", money(Math.abs(cb - spent)), "of " + money(cb) + " budget") + '</div>' +
+      '<div class="bar ' + st + '" style="margin-bottom:14px"><span class="fill" style="width:' + (cb ? clamp(spent / cb * 100, 0, 100) : 0) + '%"></span>' + (p.current && !isFixed(c) ? '<span class="pace" style="left:calc(' + (p.elapsed / p.days * 100) + '% - 1px)"></span>' : "") + '</div>' +
       (list.length ? list.map(txRow).join("") : '<p class="small faint">Nothing spent here yet.</p>') +
       '<div class="row" style="margin-top:14px"><button class="btn block" id="cdEdit" type="button">Edit category & budget</button></div>';
     openSheet(html, function (el) {
       $("#cdEdit", el).onclick = function () { catSheet(c); };
       el.onclick = function (e) { var b = e.target.closest('[data-act="tx"]'); if (b) { el.onclick = null; txSheet(db.transactions.filter(function (t) { return t.id === b.dataset.id; })[0]); } };
     });
+  }
+
+  // ======================================================================
+  // Bank statement import (PDF: Absa-style; CSV/Excel: Discovery-style or generic)
+  // Imports everything from the salary payment onward, categorised, de-duplicated.
+  // ======================================================================
+  var PDFJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+  var PDFJS_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  function loadScript(url, globalName) {
+    if (window[globalName]) return Promise.resolve(window[globalName]);
+    return new Promise(function (res, rej) {
+      var sc = document.createElement("script"); sc.src = url;
+      sc.onload = function () { res(window[globalName]); };
+      sc.onerror = function () { rej(new Error("Couldn't load the PDF reader — are you online?")); };
+      document.head.appendChild(sc);
+    });
+  }
+  // PDF → visual text lines (items grouped by their vertical position)
+  function pdfLines(buf) {
+    return loadScript(PDFJS_URL, "pdfjsLib").then(function (lib) {
+      lib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+      return lib.getDocument({ data: buf }).promise;
+    }).then(function (pdf) {
+      var jobs = [];
+      for (var i = 1; i <= pdf.numPages; i++) jobs.push(pdf.getPage(i).then(function (pg) { return pg.getTextContent(); }));
+      return Promise.all(jobs);
+    }).then(function (pages) {
+      var lines = [];
+      pages.forEach(function (tc) {
+        var items = tc.items.filter(function (it) { return it.str && it.str.trim(); })
+          .map(function (it) { return { s: it.str.trim(), x: it.transform[4], y: it.transform[5] }; })
+          .sort(function (a, b) { return b.y - a.y || a.x - b.x; });
+        var rows = [];
+        items.forEach(function (it) {
+          var row = rows.length && Math.abs(rows[rows.length - 1].y - it.y) < 3 ? rows[rows.length - 1] : null;
+          if (!row) { row = { y: it.y, items: [] }; rows.push(row); }
+          row.items.push(it);
+        });
+        rows.forEach(function (r) { lines.push(r.items.sort(function (a, b) { return a.x - b.x; }).map(function (i) { return i.s; }).join(" ").replace(/\s+/g, " ")); });
+      });
+      return lines;
+    });
+  }
+  var MONEY_TOKEN = /-?R\s?\d{1,3}(?:[  ]\d{3})*[.,]\d{2}(?!\d)|-?R\s?\d+[.,]\d{2}(?!\d)/g;
+  function money2num(t) { var neg = /^-/.test(t); var v = parseAmount(t.replace(/^-/, "")); return neg ? -v : v; }
+  function normDate(d) {
+    var m;
+    if ((m = d.match(/^(\d{4})-(\d{2})-(\d{2})/))) return m[1] + "-" + m[2] + "-" + m[3];
+    if ((m = d.match(/^(\d{1,2})[\/.](\d{1,2})[\/.](\d{2,4})/))) { var y = +m[3]; if (y < 100) y += 2000; return y + "-" + pad(+m[2]) + "-" + pad(+m[1]); }
+    if ((m = d.toLowerCase().match(/^(\d{1,2})\s?([a-z]{3})[a-z]*\s?(\d{4})/)) && MON3.indexOf(m[2]) > -1) return m[3] + "-" + pad(MON3.indexOf(m[2]) + 1) + "-" + pad(+m[1]);
+    return null;
+  }
+  function parseStatementLines(lines) {
+    var recs = [], cur = null;
+    var skip = /^(eStamp|Ref:|To confirm|08600|Date\s+Transaction|Transaction History|Statement for|Current Balance|Available Balance|Uncleared|Budget Balance|Balance Brought|Balance Carried|Page \d|BEN-|EIKESTROOM|AUDAS)/i;
+    var take = function (rec, str) {
+      var toks = str.match(MONEY_TOKEN) || [];
+      if (!toks.length) return str;
+      if (rec.amount == null) rec.amount = money2num(toks.length >= 2 ? toks[toks.length - 2] : toks[0]);
+      return str.replace(MONEY_TOKEN, " ");
+    };
+    lines.forEach(function (raw) {
+      var l = String(raw).trim();
+      if (!l || skip.test(l) || /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2}.*)?$/.test(l) || /^\d+$/.test(l)) return;
+      var m = l.match(/^(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{4}|\d{1,2} [A-Za-z]{3} \d{4})\s+(.+)$/);
+      if (m && normDate(m[1])) { cur = { date: normDate(m[1]), text: "", amount: null }; recs.push(cur); cur.text = take(cur, m[2]); return; }
+      if (!cur) return;
+      cur.text += " " + take(cur, l);
+    });
+    return recs.filter(function (r) { return r.amount != null && Math.abs(r.amount) > 0.001; })
+      .map(function (r) { return { date: r.date, text: r.text.replace(/\s+/g, " ").trim(), amount: r.amount }; });
+  }
+  // Rows from CSV/Excel → records, if the sheet looks like a statement (date + amount + description)
+  function statementFromRows(rows) {
+    rows = (rows || []).filter(function (r) { return r && r.some(function (c) { return String(c).trim() !== ""; }); });
+    for (var h = 0; h < Math.min(rows.length, 12); h++) {
+      var hdr = rows[h].map(function (c) { return String(c).toLowerCase().trim(); });
+      var di = hdr.findIndex(function (c) { return /date/.test(c); });
+      var ai = hdr.findIndex(function (c) { return /^amount|amount \(|^value$|bedrag/.test(c); });
+      var dbi = hdr.findIndex(function (c) { return /^debit|withdraw|paid out|money out/.test(c); });
+      var cri = hdr.findIndex(function (c) { return /^credit|deposit|paid in|money in/.test(c); });
+      var xi = hdr.findIndex(function (c) { return /desc|details|narrative|merchant|transaction|reference|particulars/.test(c); });
+      var ti = hdr.findIndex(function (c) { return /^type$/.test(c); });
+      if (di < 0 || xi < 0 || (ai < 0 && dbi < 0)) continue;
+      var out = [];
+      rows.slice(h + 1).forEach(function (r) {
+        var dv = r[di]; var date = typeof dv === "number" ? iso(new Date(Math.round((dv - 25569) * 86400000))) : normDate(String(dv).trim());
+        if (!date) return;
+        var amt = ai > -1 ? parseAmount(r[ai]) : (parseAmount(r[cri]) || 0) - (Math.abs(parseAmount(r[dbi])) || 0);
+        if (!isFinite(amt) || !amt) return;
+        out.push({ date: date, text: ((ti > -1 ? r[ti] + " · " : "") + r[xi]).trim(), amount: amt, kind: ti > -1 ? String(r[ti]) : "" });
+      });
+      return out.length >= 3 ? out : null;
+    }
+    return null;
+  }
+  function cleanStatementMerchant(d) {
+    if (/absapay/i.test(d)) return "Online payment (AbsaPay)";
+    var t = d.replace(/^[A-Za-z ]+ · /, "")
+      .replace(/\(EFFEC \d{8}\)/gi, " ").replace(/CARD NO\.?\s*\d+/gi, " ")
+      .replace(/^(POS PURCHASE|OVERSEAS PURCHASE|ACB DEBIT:EXTERNAL|ACB CREDIT|DIGITAL PAYMENT (DT|CR) ABSA BANK|DIGITAL PAYMENT (DT|CR)|IMDTE DIGITAL PMT ABSA BANK|EXT STOP ORDER TO|STOP ORDER TO ABSA BANK|STOP ORDER TO|PAYSHAP EXT DEBIT|PAYSHAP EXT CREDIT|DIGITAL TRANSF (DT|CR) [\d-]+ ABSA BANK|AIRTIME DEBIT CARD NO\.?\s*\d*)\s*/i, "")
+      .replace(/^(yoco|hpy|s2s|paygate|dl|sp|nyx|sumup|payfast)\s*\*?\s*/i, "")
+      .replace(/\b[0-9a-f]{10,}\b/gi, " ").replace(/\b(?=[a-z0-9]*\d{3,})[a-z0-9]{5,}\b/gi, " ").replace(/\(\d+\)/g, " ").replace(/\b\d{5,}\b/g, " ").replace(/[*]/g, " ").replace(/\s+/g, " ").trim();
+    return titleCase(t).slice(0, 48) || "Bank transaction";
+  }
+  var FEE_RE = /transaction fee|monthly acc(ount)? fee|notific fee|facility fee|service fee|vitality money|intl payment fee|declined fee|interest charged|^fee · |^interest · .*charged|withdrawal fee|stamped statement/i;
+  var TRANSFER_RE = /krediet betaal|digital transf|\btransfer\b|own account|card payment received|\bskuld\b|real-time payment|tax betaling/i;
+  function statementCandidates(recs) {
+    return recs.map(function (r, i) {
+      var eff = r.text.match(/\(EFFEC (\d{2})(\d{2})(\d{4})\)/);
+      var date = eff ? eff[3] + "-" + eff[2] + "-" + eff[1] : r.date;
+      var fee = FEE_RE.test(r.text) || /^fee$/i.test(r.kind || "");
+      var transfer = !fee && (TRANSFER_RE.test(r.text) || (r.amount > 0 && /payshap payment|^eft$/i.test(r.kind || "")));
+      var type = transfer ? "transfer" : r.amount > 0 ? "income" : "expense";
+      var c = { i: i, date: date, posted: r.date, amount: Math.round(Math.abs(r.amount) * 100) / 100, type: type, fee: fee, merchant: fee ? "Bank fees" : cleanStatementMerchant(r.text), raw: r.text, on: !transfer };
+      c.salary = type === "income" && looksLikeSalary({ type: "income", amount: c.amount, merchant: c.merchant, raw: r.text });
+      return c;
+    });
+  }
+  function markPassThrough(cands) {
+    cands.forEach(function (a) {
+      if (a.type !== "transfer" || a.passPaired) return;
+      var b = cands.filter(function (x) { return x !== a && !x.passPaired && x.type === "expense" && Math.abs(x.amount - a.amount) < 0.01 && Math.abs(dayDiff(fromIso(x.posted), fromIso(a.posted))) <= 2; })[0];
+      if (b) { b.type = "transfer"; b.on = false; b.passThrough = true; b.passPaired = a.passPaired = true; }
+    });
+  }
+  function markDuplicates(cands) {
+    var used = {};
+    cands.forEach(function (c) {
+      var hit = txs().filter(function (t) {
+        return !used[t.id] && t.type === c.type && Math.abs(t.amount - c.amount) < 0.01 &&
+          (Math.abs(dayDiff(fromIso(t.date), fromIso(c.date))) <= 4 || Math.abs(dayDiff(fromIso(t.date), fromIso(c.posted))) <= 4);
+      })[0];
+      if (hit) { used[hit.id] = 1; c.dup = true; c.on = false; }
+    });
+  }
+  function importStatementPdf(file) {
+    toast("Reading " + file.name + "…");
+    var r = new FileReader();
+    r.onload = function () {
+      pdfLines(new Uint8Array(r.result)).then(function (lines) {
+        var recs = parseStatementLines(lines);
+        if (recs.length < 2) { toast("I couldn't find transactions in that PDF. A CSV download from your bank also works."); return; }
+        statementSheet(recs, file.name);
+      }).catch(function (e) { toast("Couldn't read the PDF: " + e.message); });
+    };
+    r.readAsArrayBuffer(file);
+  }
+  function statementSheet(recs, fname) {
+    var cands = statementCandidates(recs);
+    markPassThrough(cands);
+    markDuplicates(cands);
+    cands.forEach(function (c) {
+      if (c.type !== "expense" || c.fee) return;
+      var g = { merchant: c.merchant, raw: c.raw, type: "expense" }; applyCategory(g); c.catId = g.catId; c.needsReview = g.needsReview; c.suggest = g.suggest;
+    });
+    var feeCat = cats().filter(function (x) { return (x.kind || guessKind(x.name)) === "fees"; })[0];
+    var salaries = cands.filter(function (c) { return c.salary; }).sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+    var earliest = cands.reduce(function (m, c) { return c.date < m ? c.date : m; }, "9999");
+    var latest = cands.reduce(function (m, c) { return c.date > m ? c.date : m; }, "0000");
+    // no salary on it (e.g. a credit card): start at the current budget month
+    var start = salaries.length ? salaries[0].date : (latest >= period(0).s && earliest < period(0).s ? period(0).s : earliest);
+    var startMonth = salaryMode() && salaries.length > 0;
+    function inRange(c) { return c.date >= start; }
+    function draw() {
+      var list = cands.filter(inRange), before = cands.length - list.length;
+      var picked = list.filter(function (c) { return c.on; });
+      var fees = picked.filter(function (c) { return c.fee; });
+      var spend = picked.filter(function (c) { return c.type === "expense"; }).reduce(function (a, c) { return a + c.amount; }, 0);
+      var dups = list.filter(function (c) { return c.dup; }).length, transfers = list.filter(function (c) { return c.type === "transfer"; }).length;
+      var toSort = picked.filter(function (c) { return c.type === "expense" && !c.fee && !c.catId; }).length;
+      var rows = list.filter(function (c) { return !c.fee; }).sort(function (a, b) { return a.date < b.date ? -1 : 1; }).map(function (c) {
+        var cc = c.catId && cat(c.catId);
+        var label = c.dup ? "Already in Budgie" : c.passThrough ? "Paid from savings that came in the same day · not counted" : c.type === "transfer" ? "Transfer · not counted" : c.type === "income" ? (c.salary ? "💰 Salary" : "Income") : cc ? cc.emoji + " " + cc.name : "❔ to sort";
+        return '<label class="st-row' + (c.on ? "" : " off") + '"><input type="checkbox" data-c="' + c.i + '" ' + (c.on ? "checked" : "") + '><span class="d">' + fromIso(c.date).getDate() + " " + MONTHS[fromIso(c.date).getMonth()].slice(0, 3) + '</span><span class="m"><b>' + esc(c.merchant) + '</b><span>' + esc(label) + '</span></span><span class="a num ' + (c.type === "income" ? "in" : "") + '">' + (c.type === "income" ? "+" : "−") + money(c.amount, true) + '</span></label>';
+      }).join("");
+      var html = sheetHead("Import bank statement", esc(fname)) +
+        '<div class="card flat small" style="background:var(--surface-2);border:none;margin-bottom:10px">' +
+        (salaries.length ? '💰 Salary found: <b>' + money(salaries[0].amount, true) + '</b> on ' + shortDay(fromIso(salaries[0].date)) + '. Importing everything from then on.' : 'No salary on this statement (a credit card?) — importing from the start of this budget month. Change the date to import more.') + '</div>' +
+        '<label class="field">Import from<input type="date" id="stStart" value="' + start + '"></label>' +
+        (salaries.length && salaryMode() ? '<label class="check" style="margin-top:10px"><input type="checkbox" id="stMonth" ' + (startMonth ? "checked" : "") + '> Start my budget month on the salary date</label>' : "") +
+        '<div class="tiles" style="margin:12px 0">' + tile("To import", picked.length + "", money(spend) + " spending") + tile("Skipped", (dups + transfers + before) + "", dups + " already in · " + transfers + " transfers · " + before + " earlier") + '</div>' +
+        (fees.length ? '<p class="small muted" style="margin:0 0 8px">' + fees.length + ' bank fees (' + money(fees.reduce(function (a, c) { return a + c.amount; }, 0), true) + ') will be added as one “Bank fees” entry.</p>' : "") +
+        '<div class="st-list">' + rows + '</div>' +
+        '<button class="btn primary block sticky-save" id="stGo" type="button" style="margin-top:10px">Import ' + picked.length + ' transactions' + (toSort ? " · " + toSort + " to sort" : "") + '</button>';
+      var keep = $("#sheet .st-list") ? $("#sheet .st-list").scrollTop : 0;
+      openSheet(html, function (el) {
+        var sl = $(".st-list", el); if (sl) sl.scrollTop = keep;
+        el.onchange = function (e) {
+          var t = e.target;
+          if (t.id === "stStart") { start = t.value || start; draw(); return; }
+          if (t.id === "stMonth") { startMonth = t.checked; return; }
+          if (t.dataset.c != null) { cands[+t.dataset.c].on = t.checked; draw(); }
+        };
+        $("#stGo", el).onclick = function () {
+          var chosen = cands.filter(function (c) { return inRange(c) && c.on; });
+          var added = 0, feeTotal = 0, feeCount = 0, lastDate = start, salaryTx = null;
+          chosen.forEach(function (c) {
+            if (c.date > lastDate) lastDate = c.date;
+            if (c.fee) { feeTotal += c.amount; feeCount++; return; }
+            var tx = touch({ id: "st_" + hash(c.posted + "|" + c.amount + "|" + c.raw), date: c.date, amount: c.amount, type: c.type, merchant: c.merchant, note: "", source: "statement", raw: c.raw.slice(0, 300) });
+            if (db.transactions.some(function (x) { return x.id === tx.id; })) return;
+            if (c.type === "expense") { tx.catId = c.catId || null; tx.needsReview = !c.catId; if (!c.catId) tx.suggest = c.suggest; }
+            else if (c.type === "transfer") tx.catId = TRANSFER;
+            db.transactions.push(tx); added++;
+            if (c.salary && (!salaryTx || c.date > salaryTx.date)) salaryTx = tx;
+          });
+          if (feeCount) {
+            var fx = touch({ id: "st_fees_" + hash(fname + start + feeTotal), date: lastDate, amount: Math.round(feeTotal * 100) / 100, type: "expense", merchant: "Bank fees (" + feeCount + " on statement)", note: "", source: "statement", catId: feeCat ? feeCat.id : null, needsReview: !feeCat });
+            if (!db.transactions.some(function (x) { return x.id === fx.id; })) { db.transactions.push(fx); added++; }
+          }
+          var started = salaryTx && startMonth ? maybeStartMonth(salaryTx, true) : false;
+          closeSheet(); ui.tab = "home"; ui.offset = 0; commit();
+          var q = reviewQueue().length;
+          toast("Imported " + added + " transactions" + (started ? " · budget month starts on payday" : "") + (q ? " · " + q + " to sort" : ""), q ? "Sort" : null, q ? reviewSheet : null);
+        };
+      });
+    }
+    draw();
+  }
+
+  // ======================================================================
+  // Budget suggestions ("plan next month") — approve, skip or edit each one
+  // ======================================================================
+  function niceRound(v) { var st = v < 1000 ? 50 : 100; return Math.ceil(v / st) * st; }
+  function planBasis() { var p0 = period(0); return p0.elapsed / p0.days >= 0.8 ? p0 : period(-1); }
+  function coverage(p) {
+    var list = stats(p).list; if (!list.length) return 0;
+    var first = list.reduce(function (m, t) { return t.date < m ? t.date : m; }, "9999");
+    return clamp((dayDiff(fromIso(first), p.end) + 1) / p.days, 0, 1);
+  }
+  function suggestionsFor(basis) {
+    var out = [], ps = [basis, period(basis.offset - 1), period(basis.offset - 2)];
+    var ss = ps.map(stats), cov = coverage(basis);
+    var withData = ss.map(function (s, i) { return i === 0 || s.list.length >= 5; });
+    cats().forEach(function (c) {
+      var b = +c.budget || 0;
+      var vals = ss.map(function (s) { return s.by[c.id] || 0; }).filter(function (v, i) { return withData[i]; });
+      var a1 = vals[0], avg = vals.reduce(function (a, v) { return a + v; }, 0) / vals.length;
+      var nTx = ss[0].list.filter(function (t) { return t.catId === c.id && t.type === "expense"; }).length;
+      var k = guessKind(c.name + " " + (c.group || "")) || c.kind;
+      var protectedCat = k === "savings" || k === "giving" || /saving|invest|spaar|beleg/i.test(c.group || "");
+      if (isFixed(c) && nTx <= 1) {
+        var steady = vals.length < 2 || !vals[1] || Math.abs(vals[1] - a1) / a1 <= 0.02;
+        if (a1 > 0 && steady && Math.abs(a1 - b) >= 1 && Math.abs(a1 - b) / Math.max(b, 1) < 0.6) out.push({ id: c.id, c: c, from: b, to: Math.round(a1 * 100) / 100, why: "Last month’s debit order was " + money(a1, true) });
+        else if (!a1 && !protectedCat && vals.length >= 2 && vals.every(function (v) { return !v; }) && b > 0) out.push({ id: c.id, c: c, from: b, to: 0, why: "Nothing charged for 2+ months — cancelled?" });
+        return;
+      }
+      if (!b && avg >= 50) { out.push({ id: c.id, c: c, from: 0, to: niceRound(avg), why: "No budget yet, but you spent about " + money(avg) + " a month" }); return; }
+      if (!b) return;
+      var over = vals.filter(function (v) { return v > b * 1.05; }).length;
+      if (a1 > b * 1.1 && over >= Math.min(2, vals.length)) out.push({ id: c.id, c: c, from: b, to: niceRound(Math.max(avg, b * 1.05)), why: "Over budget " + (vals.length > 1 ? "in " + over + " of the last " + vals.length + " months" : "last month") + " (about " + money(vals.length > 1 ? avg : a1) + ")" });
+      else if (!protectedCat && cov >= 0.7 && vals.length >= 3 && vals.every(function (v) { return v < b * 0.6; }) && b >= 200) out.push({ id: c.id, c: c, from: b, to: niceRound(avg * 1.1), why: "You’ve only used about " + money(avg) + " a month" });
+    });
+    var inc = ss[0].income, expected = +db.settings.income || 0;
+    if (inc > 0 && cov >= 0.7 && Math.abs(inc - expected) / Math.max(expected, 1) > 0.02) out.push({ id: "__income", income: true, from: expected, to: Math.round(inc * 100) / 100, why: "You actually received " + money(inc) + " in " + basis.label });
+    return out;
+  }
+  function planSheet() {
+    var basis = planBasis(), sug = suggestionsFor(basis), cov = coverage(basis);
+    var st = { on: {}, amt: {}, manual: {} };
+    sug.forEach(function (x) { st.on[x.id] = true; st.amt[x.id] = x.to; });
+    var income = function () { var i = sug.filter(function (x) { return x.income; })[0]; return i && st.on[i.id] ? st.amt[i.id] : +db.settings.income || 0; };
+    var newBudget = function (c) {
+      if (st.manual[c.id] != null) return st.manual[c.id];
+      var x = sug.filter(function (y) { return y.id === c.id; })[0];
+      return x && st.on[x.id] ? st.amt[x.id] : +c.budget || 0;
+    };
+    function draw() {
+      var total = cats().reduce(function (a, c) { return a + newBudget(c); }, 0), left = income() - total;
+      var html = sheetHead("Plan next month", "Based on how " + esc(basis.label) + " went" + (cov < 0.7 ? " (partly tracked — I’ve been careful)" : "")) +
+        '<div class="tiles three" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">' + tile("Income", money(income()), "") + tile("Budget", money(total), "") + tile(left >= 0 ? "Left over" : "Short", '<span class="' + (left >= 0 ? "delta-down" : "delta-up") + '">' + money(Math.abs(left)) + '</span>', "") + '</div>' +
+        (sug.length ? sug.map(function (x) {
+          var name = x.income ? "💰 Monthly income" : esc(x.c.emoji) + " " + esc(x.c.name);
+          return '<div class="sug' + (st.on[x.id] ? "" : " off") + '"><div class="sug-top"><b>' + name + '</b><label class="toggle"><input type="checkbox" data-on="' + x.id + '" ' + (st.on[x.id] ? "checked" : "") + '><span>' + (st.on[x.id] ? "Accepted" : "Skipped") + '</span></label></div>' +
+            '<div class="small muted">' + esc(x.why) + '</div><div class="row" style="margin-top:6px"><span class="num faint">' + money(x.from) + ' →</span><input class="num" data-amt="' + x.id + '" inputmode="decimal" value="' + st.amt[x.id] + '" style="max-width:140px;padding:7px 10px"></div></div>';
+        }).join("") : '<div class="empty" style="padding:14px"><div class="emoji">👌</div>No changes needed — last month matched your budget well.</div>') +
+        '<div class="small muted" style="font-weight:600;margin:14px 0 6px">Change any other category</div>' +
+        '<div class="row"><select id="mSel" style="flex:1">' + cats().filter(function (c) { return !sug.some(function (x) { return x.id === c.id; }); }).map(function (c) { return '<option value="' + c.id + '">' + esc(c.emoji) + " " + esc(c.name) + " (" + money(c.budget) + ")</option>"; }).join("") + '</select><input id="mAmt" inputmode="decimal" placeholder="R" style="max-width:110px"><button class="btn sm" id="mAdd" type="button">Set</button></div>' +
+        Object.keys(st.manual).map(function (id) { var c = cat(id); return c ? '<div class="summary-line small"><span>' + esc(c.emoji) + " " + esc(c.name) + '</span><span class="num">' + money(c.budget) + ' → <b>' + money(st.manual[id]) + '</b> <button class="link" data-unset="' + id + '" type="button">undo</button></span></div>' : ""; }).join("") +
+        '<div style="margin-top:12px"><div class="summary-line"><span class="muted">Income</span><span class="num">' + money(income()) + '</span></div><div class="summary-line"><span class="muted">Budget</span><span class="num">' + money(total) + '</span></div>' +
+        '<div class="summary-line total"><span>' + (left >= 0 ? "Left over" : "Short by") + '</span><span class="num ' + (left >= 0 ? "delta-down" : "delta-up") + '">' + money(Math.abs(left)) + '</span></div></div>' +
+        '<button class="btn primary block sticky-save" id="plNext" type="button">Use from next payday · ' + shortDay(nextMonthStart()) + '</button>' +
+        '<button class="btn block" id="plNow" type="button" style="margin-top:8px">Apply now</button>';
+      openSheet(html, function (el) {
+        el.onchange = function (e) {
+          var t = e.target;
+          if (t.dataset.on) { st.on[t.dataset.on] = t.checked; draw(); }
+          else if (t.dataset.amt) { st.amt[t.dataset.amt] = Math.abs(parseAmount(t.value)) || 0; st.on[t.dataset.amt] = true; draw(); }
+        };
+        $("#mAdd", el).onclick = function () { var id = $("#mSel", el).value, v = Math.abs(parseAmount($("#mAmt", el).value)); if (!id || !isFinite(v)) { toast("Pick a category and an amount"); return; } st.manual[id] = v; draw(); };
+        $$("[data-unset]", el).forEach(function (b) { b.onclick = function () { delete st.manual[b.dataset.unset]; draw(); }; });
+        var build = function () {
+          return cats().map(function (c) { return { name: c.name, budget: newBudget(c), group: c.group, keywords: c.keywords, fixed: c.fixed === true || c.fixed === false ? c.fixed : null, on: true }; });
+        };
+        $("#plNext", el).onclick = function () {
+          scheduleBudget(build(), [], "merge", "Suggested changes", { income: income() });
+          closeSheet(); commit(); toast("📄 Saved — next month’s budget switches on at payday");
+        };
+        $("#plNow", el).onclick = function () {
+          var items = build();
+          applyBudget(items, [], "merge");
+          if (income() !== (+db.settings.income || 0)) { db.settings.income = income(); touch(db.settings); }
+          closeSheet(); commit(); toast("Budget updated ✓");
+        };
+      });
+    }
+    draw();
+  }
+
+  // ======================================================================
+  // Month-end recap story — opens once when a new month starts
+  // ======================================================================
+  function recapData(p) {
+    var s = stats(p), prev = stats(period(p.offset - 1));
+    var all = cats(), budget = s.budget, spent = s.spent, diff = budget - spent;
+    var rows = all.map(function (c) { var b = budgetFor(c, p), v = s.by[c.id] || 0; return { c: c, b: b, v: v, fixed: isFixed(c) }; });
+    var budgeted = rows.filter(function (r) { return r.b > 0; });
+    var within = budgeted.filter(function (r) { return r.v <= r.b * 1.001; }).length;
+    var score = budget ? Math.round(clamp(55 + diff / budget * 250, 0, 70) + (budgeted.length ? within / budgeted.length * 30 : 15)) : 0;
+    var heroes = rows.filter(function (r) { return !r.fixed && r.b >= 300 && r.v > 0; }).sort(function (a, b) { return (b.b - b.v) / b.b - (a.b - a.v) / a.b; });
+    var villains = rows.filter(function (r) { return r.v > r.b + 1; }).sort(function (a, b) { return (b.v - b.b) - (a.v - a.b); });
+    var expenses = s.list.filter(function (t) { return t.type === "expense" && t.catId !== TRANSFER; });
+    var topMerchantIn = function (catId) {
+      var m = {}; expenses.filter(function (t) { return t.catId === catId; }).forEach(function (t) { m[t.merchant] = m[t.merchant] || { n: 0, v: 0 }; m[t.merchant].n++; m[t.merchant].v += t.amount; });
+      var k = Object.keys(m).sort(function (a, b) { return m[b].v - m[a].v; })[0]; return k ? { name: k, n: m[k].n, v: m[k].v } : null;
+    };
+    // day-to-day only: debit orders on the 1st aren't a "big spending day"
+    var days = {}; expenses.forEach(function (t) { var c = cat(t.catId); if (c && isFixed(c)) return; days[t.date] = (days[t.date] || 0) + t.amount; });
+    var noSpend = p.days - Object.keys(days).length;
+    var bigDay = Object.keys(days).sort(function (a, b) { return days[b] - days[a]; })[0];
+    var bigDayTop = bigDay ? expenses.filter(function (t) { var c = cat(t.catId); return t.date === bigDay && !(c && isFixed(c)); }).sort(function (a, b) { return b.amount - a.amount; }).slice(0, 2) : [];
+    var wk = 0, variable = 0, early = 0;
+    expenses.forEach(function (t) { var c = cat(t.catId); if (c && isFixed(c)) return; variable += t.amount; var d = fromIso(t.date).getDay(); if (d === 0 || d === 5 || d === 6) wk += t.amount; if (dayDiff(p.start, fromIso(t.date)) < p.days / 3) early += t.amount; });
+    var personality = variable && wk / variable > 0.55 ? ["🎉", "The Weekend Spender", Math.round(wk / variable * 100) + "% of your day-to-day spending happened Fri–Sun."]
+      : variable && early / variable > 0.5 ? ["🔥", "The Early Burner", "Half your day-to-day spending was in the first ten days."]
+      : diff >= 0 && noSpend >= 8 ? ["🐢", "The Steady Saver", noSpend + " no-spend days and you stayed under budget."]
+      : ["🎯", "The Balancer", "Your spending was spread evenly through the month."];
+    var coffee = expenses.filter(function (t) { var c = cat(t.catId); return /koffie|coffee|cafe|caffe|vida e|seattle|mugg|starbucks|merkava|coffeeworks/i.test(t.merchant + " " + (c ? c.name : "")); });
+    var coffeeV = coffee.reduce(function (a, t) { return a + t.amount; }, 0);
+    var isSaving = function (c) { return (c.kind || guessKind(c.name)) === "savings" || /saving|invest|spaar|beleg/i.test(c.group || ""); };
+    var isGiving = function (c) { return (c.kind || guessKind(c.name)) === "giving" || /tithe|tiende|donation|giving|church/i.test(c.name); };
+    var saved = rows.filter(function (r) { return isSaving(r.c); }).reduce(function (a, r) { return a + Math.max(r.v, r.b); }, 0);
+    var given = rows.filter(function (r) { return isGiving(r.c); }).reduce(function (a, r) { return a + r.v; }, 0);
+    var income = s.income || incomeFor(p);
+    var groupsT = { fixed: 0, day: 0, save: 0 };
+    rows.forEach(function (r) { if (isSaving(r.c)) groupsT.save += r.v; else if (r.fixed) groupsT.fixed += r.v; else groupsT.day += r.v; });
+    var changes = rows.map(function (r) { return { c: r.c, d: r.v - (prev.by[r.c.id] || 0) }; }).filter(function (x) { return Math.abs(x.d) >= 50; }).sort(function (a, b) { return Math.abs(b.d) - Math.abs(a.d); }).slice(0, 3);
+    return { p: p, s: s, prev: prev, budget: budget, spent: spent, diff: diff, score: score, within: within, budgeted: budgeted.length, hero: heroes[0], villain: villains[0], villainTop: villains[0] ? topMerchantIn(villains[0].c.id) : null,
+      top3: rows.slice().sort(function (a, b) { return b.v - a.v; }).filter(function (r) { return r.v > 0; }).slice(0, 3), noSpend: noSpend, bigDay: bigDay, bigDayV: bigDay ? days[bigDay] : 0, bigDayTop: bigDayTop,
+      personality: personality, coffeeN: coffee.length, coffeeV: coffeeV, saved: saved, given: given, income: income, groups: groupsT, changes: changes, suggestions: suggestionsFor(p).length };
+  }
+  function recapSlides(r) {
+    var pct = function (v, of) { return of ? Math.round(v / of * 100) + "%" : "–"; };
+    var sl = [];
+    sl.push({ bg: "linear-gradient(160deg,#0f5c55,#0f766e)", html: '<div class="st-eyebrow">' + esc(r.p.label) + ' recap</div><div class="st-big">' + (r.diff >= 0 ? "🎉" : "😬") + '</div><h1>' + (r.diff >= 0 ? money(r.diff) + " under budget" : money(-r.diff) + " over budget") + '</h1><p>You spent ' + money(r.spent) + ' of your ' + money(r.budget) + ' budget.</p><div class="st-score"><b>' + r.score + '</b><span>/100 month score</span></div><p class="st-small">' + r.within + ' of ' + r.budgeted + ' categories stayed within budget.</p>' });
+    var tot = r.groups.fixed + r.groups.day + r.groups.save || 1;
+    sl.push({ bg: "linear-gradient(160deg,#1c3f7a,#2a78d6)", html: '<div class="st-eyebrow">Where it went</div><h1>Your top three</h1>' + r.top3.map(function (x, i) { return '<div class="st-rank"><span>' + (i + 1) + '</span><b>' + esc(x.c.emoji) + " " + esc(x.c.name) + '</b><em>' + money(x.v) + '</em></div>'; }).join("") +
+      '<div class="st-stack"><i style="flex:' + r.groups.fixed + ';background:#f5c542"></i><i style="flex:' + r.groups.day + ';background:#9ec5f4"></i><i style="flex:' + r.groups.save + ';background:#7bd389"></i></div><p class="st-small">Bills ' + pct(r.groups.fixed, tot) + ' · Day-to-day ' + pct(r.groups.day, tot) + ' · Savings ' + pct(r.groups.save, tot) + '</p>' });
+    if (r.hero || r.villain) sl.push({ bg: "linear-gradient(160deg,#5b2b82,#9b4dca)", html: '<div class="st-eyebrow">Heroes & villains</div>' +
+      (r.hero ? '<div class="st-card"><div>🏆 Most disciplined</div><b>' + esc(r.hero.c.emoji) + " " + esc(r.hero.c.name) + '</b><p>' + money(r.hero.v) + ' of ' + money(r.hero.b) + ' — ' + pct(r.hero.b - r.hero.v, r.hero.b) + ' to spare</p></div>' : "") +
+      (r.villain ? '<div class="st-card"><div>😈 The one that got away</div><b>' + esc(r.villain.c.emoji) + " " + esc(r.villain.c.name) + '</b><p>' + money(r.villain.v - r.villain.b) + ' over' + (r.villainTop ? ' — ' + esc(r.villainTop.name) + ' × ' + r.villainTop.n : "") + '</p></div>' : '<div class="st-card"><div>😇 No villains</div><b>Every category stayed in budget</b></div>') });
+    sl.push({ bg: "linear-gradient(160deg,#a8461f,#eb6834)", html: '<div class="st-eyebrow">Your money personality</div><div class="st-big">' + r.personality[0] + '</div><h1>' + r.personality[1] + '</h1><p>' + esc(r.personality[2]) + '</p>' +
+      '<div class="st-pair"><div><b>' + r.noSpend + '</b><span>no-spend days</span></div>' + (r.bigDay ? '<div><b>' + money(r.bigDayV) + '</b><span>biggest day · ' + shortDay(fromIso(r.bigDay)) + '</span></div>' : "") + '</div>' +
+      (r.bigDayTop.length ? '<p class="st-small">That day: ' + r.bigDayTop.map(function (t) { return esc(t.merchant) + " " + money(t.amount); }).join(", ") + '</p>' : "") });
+    if (r.coffeeN >= 3) { var nf = cats().filter(function (c) { return /netflix/i.test(c.name); })[0]; sl.push({ bg: "linear-gradient(160deg,#5a3a22,#8b5e3c)", html: '<div class="st-eyebrow">Small stuff adds up</div><div class="st-big">☕</div><h1>' + r.coffeeN + ' coffees · ' + money(r.coffeeV) + '</h1><p>' + (nf && nf.budget ? "That’s " + Math.max(1, Math.round(r.coffeeV / nf.budget)) + " months of Netflix." : "That’s " + money(r.coffeeV * 12) + " a year at this pace.") + '</p>' }); }
+    if (r.prev.list.length >= 5) sl.push({ bg: "linear-gradient(160deg,#134e4a,#1baf7a)", html: '<div class="st-eyebrow">Versus last month</div><h1>' + (r.spent <= r.prev.spent ? "▼ " + money(r.prev.spent - r.spent) + " less" : "▲ " + money(r.spent - r.prev.spent) + " more") + '</h1><p>than the month before (' + money(r.prev.spent) + ').</p>' +
+      r.changes.map(function (x) { return '<div class="st-rank"><span>' + (x.d > 0 ? "▲" : "▼") + '</span><b>' + esc(x.c.emoji) + " " + esc(x.c.name) + '</b><em>' + money(Math.abs(x.d)) + '</em></div>'; }).join("") });
+    sl.push({ bg: "linear-gradient(160deg,#14532d,#22a06b)", html: '<div class="st-eyebrow">Saving & giving</div><div class="st-pair"><div><b>' + money(r.saved) + '</b><span>saved & invested · ' + pct(r.saved, r.income) + ' of income</span></div>' + (r.given ? '<div><b>' + money(r.given) + '</b><span>given · ' + pct(r.given, r.income) + ' of income</span></div>' : "") + '</div>' +
+      '<p>' + (r.income ? money(Math.max(0, r.income - r.spent)) + " of your " + money(r.income) + " income wasn’t spent." : "") + '</p>' });
+    sl.push({ bg: "linear-gradient(160deg,#0f5c55,#0f766e)", final: true, html: '<div class="st-eyebrow">Next month</div><div class="st-big">🧭</div><h1>' + (r.suggestions ? r.suggestions + " suggested change" + (r.suggestions > 1 ? "s" : "") : "Your budget fits well") + '</h1><p>' + (r.suggestions ? "Based on this month, I have ideas for next month’s budget. You approve each one." : "Keep the same budget, or tweak anything you like.") + '</p>' +
+      '<div class="st-actions"><button class="btn primary" data-story="plan" type="button">Review next month’s budget</button><button class="btn" data-story="close" type="button" style="background:rgba(255,255,255,.18);color:#fff">Done</button></div>' });
+    return sl;
+  }
+  var story = null;
+  function openRecap(p) {
+    var r = recapData(p), slides = recapSlides(r);
+    local.recapSeen = local.recapSeen || {}; local.recapSeen[p.s] = now(); saveLocal();
+    var el = $("#story"), idx = 0, timer = null, paused = false;
+    story = { close: close };
+    function show(i) {
+      idx = clamp(i, 0, slides.length - 1);
+      el.style.background = slides[idx].bg;
+      el.innerHTML = '<div class="st-bars">' + slides.map(function (_, j) { return '<i class="' + (j < idx ? "done" : j === idx ? "now" : "") + '"><b></b></i>'; }).join("") + '</div>' +
+        '<button class="st-close" data-story="close" type="button" aria-label="Close recap">' + ICON.close + '</button>' +
+        '<div class="st-body">' + slides[idx].html + '</div>' +
+        (slides[idx].final ? "" : '<div class="st-tap st-prev" data-story="prev"></div><div class="st-tap st-next" data-story="next"></div>');
+      clearTimeout(timer);
+      if (!slides[idx].final) timer = setTimeout(function () { if (!paused) show(idx + 1); }, 7000);
+    }
+    function close() { clearTimeout(timer); el.hidden = true; el.innerHTML = ""; story = null; document.removeEventListener("keydown", key); }
+    function key(e) { if (e.key === "Escape") close(); if (e.key === "ArrowRight") show(idx + 1); if (e.key === "ArrowLeft") show(idx - 1); }
+    el.onclick = function (e) {
+      var a = e.target.closest("[data-story]"); if (!a) return;
+      var k = a.dataset.story;
+      if (k === "close") close(); else if (k === "next") show(idx + 1); else if (k === "prev") show(idx - 1);
+      else if (k === "plan") { close(); planSheet(); }
+    };
+    el.onpointerdown = function () { paused = true; }; el.onpointerup = function () { paused = false; };
+    document.addEventListener("keydown", key);
+    el.hidden = false; show(0);
+  }
+  function recapPeriod() { var prev = period(-1); return stats(prev).list.length >= 5 ? prev : null; }
+  function maybeAutoRecap() {
+    if (ui.recapChecked || ui.tab !== "home" || !$("#sheetWrap").hidden) return; ui.recapChecked = true;
+    var rp = recapPeriod(); if (!rp) return;
+    var seen = local.recapSeen && local.recapSeen[rp.s];
+    if (seen || dayDiff(period(0).start, today()) > 14) return;
+    setTimeout(function () { if ($("#sheetWrap").hidden && !story) openRecap(rp); }, 1200);
   }
 
   // ======================================================================
@@ -1119,13 +1618,23 @@
     if (cell || row.length) { row.push(cell); rows.push(row); }
     return rows;
   }
+  // "November 26", "Augustus25", "Des24", "Okt 2026" → comparable number (yyyymm), or 0
+  function sheetMonth(name) {
+    var n = String(name).toLowerCase(), names = [["jan"], ["feb"], ["mar", "maa"], ["apr"], ["may", "mei"], ["jun"], ["jul"], ["aug"], ["sep"], ["oct", "okt"], ["nov"], ["dec", "des"]];
+    var m = -1; names.forEach(function (al, i) { al.forEach(function (a) { if (new RegExp("(^|[^a-z])" + a).test(n)) m = i; }); });
+    var y = n.match(/(\d{4}|\d{2})(?!\d)/);
+    if (m < 0 || !y) return 0;
+    var yr = +y[1]; if (yr < 100) yr += 2000;
+    return yr * 100 + m + 1;
+  }
   function handleFile(file) {
     if (!file) return;
     var name = file.name.toLowerCase();
     if (/\.json$/.test(name)) { restoreBackup(file); return; }
+    if (/\.pdf$/.test(name)) { importStatementPdf(file); return; }
     var reader = new FileReader();
     if (/\.csv$|\.txt$/.test(name)) {
-      reader.onload = function () { importRows(parseCsv(String(reader.result)), file.name); };
+      reader.onload = function () { var rows = parseCsv(String(reader.result)), st = statementFromRows(rows); if (st && !ui.importForNext) statementSheet(st, file.name); else importRows(rows, file.name); };
       reader.readAsText(file);
     } else {
       toast("Reading " + file.name + "…");
@@ -1133,14 +1642,20 @@
         reader.onload = function () {
           try {
             var wb = X.read(new Uint8Array(reader.result), { type: "array" });
-            // choose the sheet that looks most like a budget
-            var best = null, bestScore = -1;
-            wb.SheetNames.forEach(function (sn) {
+            // choose the newest month's sheet among those that look like a budget
+            var best = null, scored = [];
+            wb.SheetNames.forEach(function (sn, idx) {
               var rows = X.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: true, defval: "" });
-              var score = detectBudget(rows).items.length + (/budget/i.test(sn) ? 5 : 0);
-              if (score >= bestScore && score > 0) { best = rows; bestScore = score; }
+              scored.push({ rows: rows, score: detectBudget(rows).items.length, when: sheetMonth(sn), idx: idx });
             });
-            importRows(best || [], file.name);
+            var top = Math.max.apply(null, scored.map(function (x) { return x.score; }).concat([0]));
+            var good = scored.filter(function (x) { return x.score > 0 && x.score >= top * 0.6; });
+            good.sort(function (a, b) { return (b.when || 0) - (a.when || 0) || b.score - a.score || a.idx - b.idx; });
+            if (good.length) best = good[0].rows;
+            var stRows = null;
+            wb.SheetNames.some(function (sn) { stRows = statementFromRows(X.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: true, defval: "" })); return !!stRows; });
+            if (stRows && !ui.importForNext && (!best || detectBudget(best).items.length < 3)) statementSheet(stRows, file.name);
+            else importRows(best || [], file.name);
           } catch (e) { toast("Couldn't read that file: " + e.message); }
         };
         reader.readAsArrayBuffer(file);
@@ -1301,7 +1816,7 @@
         (det.incomeItems.length ? '<div class="summary-line"><span class="muted">Monthly income</span><span class="num">' + money(inc) + '</span></div>' : "") +
         '<div class="summary-line total"><span>Total monthly budget</span><span class="num">' + money(tot) + '</span></div>' +
         '<button class="btn primary block sticky-save" id="impGo" type="button" style="margin-top:8px">' + (when === "next" ? "Use from next payday" : "Import " + on.length + " categories") + '</button>' +
-        '<p class="small faint" style="text-align:center">' + (mode === "merge" ? "Existing categories with the same name get the new amount. Nothing else changes." : "Your current categories are replaced. Transactions stay; any in removed categories become unsorted.") + '</p>';
+        '<p class="small faint" style="text-align:center">' + (mode === "merge" ? "Existing categories with the same name get the new amount. Nothing else changes." : "Your current categories are replaced — except " + cats().filter(keepOnReplace).length + " you added in the app or used recently, which are kept.") + '</p>';
       var keepScroll = $("#sheet .imp-table") ? $("#sheet .imp-table").parentNode.scrollTop : 0;
       openSheet(html, function (el) {
         var sc = $(".imp-table", el); if (sc) sc.parentNode.scrollTop = keepScroll;
@@ -1435,7 +1950,7 @@
   function mergeDocs(a, b) {
     var out = blankDb();
     out.settings = (b.settings && (b.settings.updatedAt || 0) > (a.settings.updatedAt || 0)) ? b.settings : a.settings;
-    ["categories", "transactions", "rules", "unread", "paydays", "pending"].forEach(function (k) {
+    ["categories", "transactions", "rules", "unread", "paydays", "pending", "history"].forEach(function (k) {
       var map = {};
       (a[k] || []).concat(b[k] || []).forEach(function (r) { var ex = map[r.id]; if (!ex || (r.updatedAt || 0) > (ex.updatedAt || 0)) map[r.id] = r; });
       out[k] = Object.keys(map).map(function (id) { return map[id]; });
@@ -1455,13 +1970,15 @@
       return decryptDoc(res.doc).then(function (remote) {
         var remoteStr = remote ? JSON.stringify(remote) : "";
         if (remote) db = mergeDocs(db, remote);
+        var failed = [];
         (res.inbox || []).forEach(function (it) {
           var r = ingestSms(it.text, it.at);
           if (r.ok) added++;
           if (r.newMonth) newMonthTx = r.tx;
-          else if (!r.dup) keepUnread(it.text, it.at, r.reason);
+          else if (!r.ok && !r.dup) failed.push({ it: it, r: r });
           acks.push(it.id);
         });
+        failed.forEach(function (f) { keepUnread(f.it.text, f.it.at, f.r.reason); });
         if (res.meta) { local.smsMeta = res.meta; saveLocal(); }
         var merged = JSON.stringify(db);
         persist();
@@ -1514,6 +2031,8 @@
     var h = box;
     if (m.lastSmsAt) h += '✅ <b>Last bank SMS received ' + when(m.lastSmsAt) + '</b> · ' + (m.count || 0) + ' so far';
     if (m.lastError && m.lastAttemptAt >= (m.lastSmsAt || 0)) h += (m.lastSmsAt ? "<br>" : "") + '⚠️ <b>Last attempt ' + when(m.lastAttemptAt) + ' failed:</b> ' + esc(m.lastError) + (m.lastFields && m.lastFields.length ? '<br><span class="faint">Fields sent: ' + esc(m.lastFields.join(", ")) + '</span>' : "");
+    var ig = local.ignoredSms;
+    if (ig && ig.count) h += '<br><span class="faint">Ignored ' + ig.count + ' message' + (ig.count > 1 ? "s" : "") + ' that weren’t payments' + (ig.last ? ' — last: “' + esc(ig.last.text.slice(0, 60)) + (ig.last.text.length > 60 ? "…" : "") + '”' : "") + '</span>';
     return h + '</div>';
   }
   function smsTest(btn) {
@@ -1655,13 +2174,17 @@
       case "next-keep": db.settings.nextChoice = { forDate: a.dataset.date, choice: "keep" }; touch(db.settings); commit(); toast("👍 Same budget next month"); break;
       case "next-upload": ui.importForNext = true; $("#fileInput").click(); break;
       case "pending-cancel": var pbc = pendingBudget(); if (pbc) { pbc.deleted = true; touch(pbc); } commit(); toast("Cancelled — next month keeps the current budget"); break;
-      case "pending-now": var pbn = pendingBudget(); if (pbn) { var rn = applyBudget(pbn.items, pbn.incomeItems, pbn.mode); pbn.applied = true; touch(pbn); commit(); toast("Using the new budget now (" + rn.count + " categories)"); } break;
+      case "pending-now": var pbn = pendingBudget(); if (pbn) { var rn = applyBudget(pbn.items, pbn.incomeItems, pbn.mode); if (pbn.income != null) { db.settings.income = pbn.income; touch(db.settings); } pbn.applied = true; touch(pbn); commit(); toast("Using the new budget now (" + rn.count + " categories)"); } break;
+      case "recap-hide": var rpx = recapPeriod(); if (rpx) { local.recapHidden = rpx.s; saveLocal(); } render(); break;
       case "ack-payday": var lp1 = latestPayday(); if (lp1) { local.ackPayday = lp1.id; saveLocal(); } render(); break;
       case "undo-payday": undoPayday(a.dataset.date); commit(); toast("Okay — that payment no longer starts a month"); break;
       case "del-payday": undoPayday(a.dataset.date); commit(); break;
       case "sms-test": smsTest(a); break;
       case "filter": ui.actFilter = a.dataset.f; render(); break;
       case "pick-file": ui.importForNext = false; $("#fileInput").click(); break;
+      case "pick-statement": ui.importForNext = false; $("#fileInput").click(); break;
+      case "plan": planSheet(); break;
+      case "recap": var rp0 = recapPeriod(); if (rp0) openRecap(rp0); else toast("Your first recap appears once you’ve tracked a full month"); break;
       case "template": downloadFile("budgie-budget-template.csv", templateCsv(), "text/csv"); break;
       case "starter": addStarter(); local.onboarded = true; saveLocal(); commit(); toast("Added suggested categories — tweak amounts on the Budget tab"); break;
       case "sample": loadSample(); commit(); break;
@@ -1767,10 +2290,11 @@
   var rzT; window.addEventListener("resize", function () { clearTimeout(rzT); rzT = setTimeout(function () { if (ui.tab === "insights") mountCharts(period(ui.offset)); }, 200); });
   setInterval(function () { if (document.visibilityState === "visible") syncNow(); }, 60000);
 
+  if (tidyUnread()) { persist(); scheduleSync(); }
   render();
   checkHash();
   syncNow();
 
   // exposed for testing in the console
-  window.Budgie = { period: period, ingestSms: ingestSms, handleFile: handleFile, parseSms: parseSms, detectBudget: detectBudget, categorise: categorise, merchantKey: merchantKey, get db() { return db; } };
+  window.Budgie = { keepUnread: keepUnread, tidyUnread: tidyUnread, unreadList: unreadList, recapData: recapData, suggestionsFor: suggestionsFor, parseStatementLines: parseStatementLines, statementFromRows: statementFromRows, statementCandidates: statementCandidates, openRecap: openRecap, planSheet: planSheet, statementSheet: statementSheet, period: period, ingestSms: ingestSms, handleFile: handleFile, parseSms: parseSms, detectBudget: detectBudget, categorise: categorise, merchantKey: merchantKey, get db() { return db; } };
 })();

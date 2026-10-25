@@ -2,3 +2,5 @@ node_modules/
 .wrangler/
 .claude/
 .DS_Store
+numbers-test/
+_test*
