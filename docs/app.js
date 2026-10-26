@@ -664,7 +664,7 @@
       }
     }
     var rpH = p.current && recapPeriod();
-    if (rpH && dayDiff(period(0).start, today()) <= 14 && local.recapHidden !== rpH.s) h += '<div class="card recap-card"><div class="row"><span style="font-size:26px">✨</span><div class="spacer"><b>Your ' + esc(rpH.label) + ' recap is ready</b><div class="small" style="opacity:.85">How the month went, in 60 seconds.</div></div><button class="btn sm" data-act="recap" type="button" style="background:#fff;color:#0f5c55">Watch</button><button class="icon-btn" data-act="recap-hide" type="button" aria-label="Hide" style="color:#fff">' + ICON.close + '</button></div></div>';
+    if (rpH && (local.simple || dayDiff(period(0).start, today()) <= 14) && local.recapHidden !== rpH.s) h += '<div class="card recap-card"><div class="row"><span style="font-size:26px">✨</span><div class="spacer"><b>Your ' + esc(rpH.label) + ' recap is ready</b><div class="small" style="opacity:.85">How the month went, in 60 seconds.</div></div><button class="btn sm" data-act="recap" type="button" style="background:#fff;color:#0f5c55">Watch</button><button class="icon-btn" data-act="recap-hide" type="button" aria-label="Hide" style="color:#fff">' + ICON.close + '</button></div></div>';
     var lp = latestPayday();
     if (p.current && lp && local.ackPayday !== lp.id && dayDiff(fromIso(lp.date), today()) <= 7 && dayDiff(fromIso(lp.date), today()) >= 0) {
       h += '<div class="card" style="background:var(--accent-soft);border-color:transparent"><div class="row" style="align-items:flex-start"><span style="font-size:26px">💰</span><div class="spacer"><b>New budget month started</b>' +
@@ -723,6 +723,7 @@
       '<button class="btn block" data-act="starter" type="button">✨ Start with suggested categories</button>' +
       '<button class="btn block" data-act="join" type="button">🔗 Join a family / other device</button>' +
       '<button class="btn block" data-act="sample" type="button">🧪 Just explore with sample data</button>' +
+      '<button class="btn block" data-act="tour" type="button">📖 Walk me through it</button>' +
       '</div><p class="small faint" style="margin:16px 0 0">Spreadsheet tip: one column with category names and one with monthly amounts is all I need. A heading like “Fixed costs” on its own row becomes a group.</p></div>';
   }
 
@@ -966,6 +967,7 @@
         '<div class="row wrap" style="margin-top:10px"><button class="btn sm primary" data-act="sync-create" type="button">Create new sync space</button><button class="btn sm" data-act="join" type="button">Join with a code</button></div>';
     }
     h += '</div>';
+    h += '<div class="card"><div class="card-h"><h3>📖 Setup guide</h3></div><p class="small muted" style="margin-top:0">Walks through installing, setting up your budget, sync, bank SMS and everyday use.</p><button class="btn sm primary" data-act="tour" type="button">Open the guide</button></div>';
     h += '<div class="card"><div class="card-h"><h3>Display</h3></div><div class="stack">' +
       '<label class="check"><input type="checkbox" id="simpleToggle" ' + (local.simple ? "checked" : "") + '> <span><b>Easy view</b><br><span class="small muted">Bigger text and fewer screens — great for parents. This device only.</span></span></label>' +
       '<div><div class="small muted" style="margin-bottom:6px">Theme</div><div class="seg" id="themeSeg">' + ["auto", "light", "dark"].map(function (t) { return '<button type="button" data-theme-v="' + t + '" class="' + (local.theme === t ? "on" : "") + '">' + t[0].toUpperCase() + t.slice(1) + '</button>'; }).join("") + '</div></div>' +
@@ -1006,7 +1008,7 @@
     $("#sheet").scrollTop = 0;
     if (onMount) onMount($("#sheet"));
   }
-  function closeSheet() { $("#sheetWrap").hidden = true; $("#sheet").innerHTML = ""; ui.sheet = null; }
+  function closeSheet() { $("#sheetWrap").hidden = true; $("#sheet").innerHTML = ""; ui.sheet = null; resumeTour(); }
   function sheetHead(title, sub) { return '<div class="sheet-h"><div><h2>' + title + '</h2>' + (sub ? '<div class="small muted">' + sub + '</div>' : "") + '</div><button class="icon-btn" data-close type="button" aria-label="Close">' + ICON.close + '</button></div>'; }
 
   function catPicker(selected, suggest) {
@@ -1558,7 +1560,7 @@
   }
   var story = null;
   function openRecap(p) {
-    var r = recapData(p), slides = recapSlides(r);
+    var easy = !!local.simple, r = recapData(p), slides = easy ? recapSlidesEasy(r) : recapSlides(r);
     local.recapSeen = local.recapSeen || {}; local.recapSeen[p.s] = now(); saveLocal();
     var el = $("#story"), idx = 0, timer = null, paused = false;
     story = { close: close };
@@ -1568,9 +1570,11 @@
       el.innerHTML = '<div class="st-bars">' + slides.map(function (_, j) { return '<i class="' + (j < idx ? "done" : j === idx ? "now" : "") + '"><b></b></i>'; }).join("") + '</div>' +
         '<button class="st-close" data-story="close" type="button" aria-label="Close recap">' + ICON.close + '</button>' +
         '<div class="st-body">' + slides[idx].html + '</div>' +
-        (slides[idx].final ? "" : '<div class="st-tap st-prev" data-story="prev"></div><div class="st-tap st-next" data-story="next"></div>');
+        (slides[idx].final ? "" : '<div class="st-tap st-prev" data-story="prev"></div><div class="st-tap st-next" data-story="next"></div>') +
+        (easy ? '<div class="ez-nav">' + (idx > 0 ? '<button class="btn ez-btn" data-story="prev" type="button">‹ Back</button>' : "<span></span>") + (slides[idx].final ? "" : '<button class="btn ez-btn" data-story="next" type="button">Next ›</button>') + '</div>' : "");
+      el.classList.toggle("easy", easy);
       clearTimeout(timer);
-      if (!slides[idx].final) timer = setTimeout(function () { if (!paused) show(idx + 1); }, 7000);
+      if (!easy && !slides[idx].final) timer = setTimeout(function () { if (!paused) show(idx + 1); }, 7000);
     }
     function close() { clearTimeout(timer); el.hidden = true; el.innerHTML = ""; story = null; document.removeEventListener("keydown", key); }
     function key(e) { if (e.key === "Escape") close(); if (e.key === "ArrowRight") show(idx + 1); if (e.key === "ArrowLeft") show(idx - 1); }
@@ -1586,11 +1590,138 @@
   }
   function recapPeriod() { var prev = period(-1); return stats(prev).list.length >= 5 ? prev : null; }
   function maybeAutoRecap() {
-    if (ui.recapChecked || ui.tab !== "home" || !$("#sheetWrap").hidden) return; ui.recapChecked = true;
+    if (ui.recapChecked || ui.tab !== "home" || !$("#sheetWrap").hidden || !$("#tour").hidden) return; ui.recapChecked = true;
     var rp = recapPeriod(); if (!rp) return;
     var seen = local.recapSeen && local.recapSeen[rp.s];
     if (seen || dayDiff(period(0).start, today()) > 14) return;
     setTimeout(function () { if ($("#sheetWrap").hidden && !story) openRecap(rp); }, 1200);
+  }
+
+  // ======================================================================
+  // Easy-view recap: four big, plain-language cards, no auto-advance
+  // ======================================================================
+  function recapSlidesEasy(r) {
+    var sl = [];
+    sl.push({ bg: "linear-gradient(160deg,#0f5c55,#0f766e)", html: '<div class="st-eyebrow">' + esc(r.p.label) + '</div><div class="st-big">' + (r.diff >= 0 ? "😊" : "😟") + '</div>' +
+      '<h1>' + (r.diff >= 0 ? "You stayed within your budget" : "You spent more than planned") + '</h1>' +
+      '<p class="ez-num">' + (r.diff >= 0 ? money(r.diff) + " was left over" : money(-r.diff) + " too much") + '</p><p>You spent ' + money(r.spent) + ' of ' + money(r.budget) + '.</p>' });
+    sl.push({ bg: "linear-gradient(160deg,#1c3f7a,#2a78d6)", html: '<div class="st-eyebrow">Most money went to</div>' +
+      r.top3.map(function (x) { return '<div class="st-rank ez-row"><b>' + esc(x.c.emoji) + " " + esc(x.c.name) + '</b><em>' + money(x.v) + '</em></div>'; }).join("") +
+      (r.villain ? '<p>' + esc(r.villain.c.emoji) + " " + esc(r.villain.c.name) + ' went ' + money(r.villain.v - r.villain.b) + ' over its budget.</p>' : '<p>Every category stayed within its budget. Well done!</p>') });
+    var kept = Math.max(0, r.income - r.spent);
+    sl.push({ bg: "linear-gradient(160deg,#14532d,#22a06b)", html: '<div class="st-eyebrow">Saving</div><div class="st-big">🐷</div>' +
+      (r.saved ? '<h1>You saved ' + money(r.saved) + '</h1>' : '<h1>' + money(kept) + ' was not spent</h1>') +
+      (r.saved && r.income ? '<p>' + money(kept) + ' of your income was not spent.</p>' : "") });
+    sl.push({ bg: "linear-gradient(160deg,#0f5c55,#0f766e)", final: true, html: '<div class="st-eyebrow">Next month</div><div class="st-big">📅</div>' +
+      '<h1>' + (r.suggestions ? "Do you want to change the budget?" : "Your budget stays the same") + '</h1>' +
+      '<p>' + (r.suggestions ? "I have " + r.suggestions + " idea" + (r.suggestions > 1 ? "s" : "") + " based on this month. You decide." : "Nothing needs to change.") + '</p>' +
+      '<div class="st-actions">' + (r.suggestions ? '<button class="btn primary ez-btn" data-story="plan" type="button">Show me the ideas</button>' : "") +
+      '<button class="btn ez-btn" data-story="close" type="button" style="background:rgba(255,255,255,.2);color:#fff">' + (r.suggestions ? "Keep it the same" : "Done") + '</button></div>' });
+    return sl;
+  }
+
+  // ======================================================================
+  // First-run guide: full setup + how to use, opens once for new users
+  // ======================================================================
+  var tour = null;
+  function tourSteps() {
+    var standalone = isStandalone(), android = /android/i.test(navigator.userAgent), ios = !android && isIOS();
+    var mini = function (inner) { return '<div class="tour-mock">' + inner + '</div>'; };
+    var mockBar = function (name, emoji, spent, budget, pct, pace, st) {
+      return '<div class="cat" style="pointer-events:none"><span class="emoji">' + emoji + '</span><span class="body"><span class="top"><span class="name">' + name + '</span><span class="amt num"><b>' + spent + '</b> <span class="faint">/ ' + budget + '</span></span></span>' +
+        '<span class="bar ' + st + '"><span class="fill" style="width:' + pct + '%"></span><span class="pace" style="left:' + pace + '%"></span></span>' +
+        '<span class="meta"><span class="status ' + st + '">' + STATUS_LABEL[st] + '</span><span></span></span></span></div>';
+    };
+    return [
+      { id: "welcome", icon: "👋", title: "Welcome to Budgie", body: "Budgie shows where your money goes each month — with simple bars per category, a daily “safe to spend”, and bank messages that sort themselves.<br><br>This short guide sets everything up with you. It takes about 3 minutes.",
+        extra: '<button class="btn block" data-tour="skip" type="button" style="margin-top:6px">I know my way around — skip</button>' },
+      { id: "install", icon: "📲", title: standalone ? "You’re using the app ✓" : "Put Budgie on your Home Screen",
+        body: standalone ? "Budgie is installed, so it opens full-screen like any other app." :
+          ios ? "<b>Do this first</b> — on iPhone the Home Screen app keeps its own data, separate from Safari.<ol class=\"steps\"><li>Tap the <b>Share</b> button <span class=\"tour-key\">⬆︎</span> at the bottom of Safari.</li><li>Scroll down and tap <b>Add to Home Screen</b>, then <b>Add</b>.</li><li>Close Safari and open <b>Budgie</b> from your Home Screen — this guide continues there.</li></ol>" :
+          android ? "<ol class=\"steps\"><li>Tap the <b>⋮</b> menu at the top right of Chrome.</li><li>Tap <b>Install app</b> (or <b>Add to Home screen</b>).</li><li>Open Budgie from your Home screen.</li></ol>" :
+          "On a laptop, click the <b>install</b> icon at the right of Chrome’s address bar (or Safari → File → <b>Add to Dock</b>). You can also just bookmark this page.",
+        next: standalone ? "Next" : "Done, or later" },
+      { id: "budget", icon: "📋", title: "Set up your budget", body: "A budget is a list of categories (like Groceries or Petrol) with an amount for each month. Pick the easiest way to start:",
+        extra: '<div class="stack"><button class="btn primary block" data-tour="import" type="button">📄 Import my spreadsheet (Excel, Numbers, CSV)</button>' +
+          '<button class="btn block" data-tour="starter" type="button">✨ Start with suggested categories</button>' +
+          '<button class="btn block" data-tour="join" type="button">🔗 Join my family’s Budgie (I have a code)</button>' +
+          '<button class="btn block" data-tour="sample" type="button">🧪 Just look around with sample data</button></div>',
+        done: function () { return cats().length > 0; }, doneText: function () { return "✓ " + cats().length + " categories set up — you can change amounts any time on the Budget tab."; } },
+      { id: "month", icon: "📅", title: "When does your month start?", body: "Most people budget from one payday to the next.",
+        extra: '<div class="stack"><label class="tour-opt"><input type="radio" name="cyc" value="salary" ' + (salaryMode() ? "checked" : "") + '><span><b>When my salary comes in</b> (recommended)<br><span class="small muted">Budgie starts a new month by itself when your salary SMS arrives.</span></span></label>' +
+          '<label class="tour-opt"><input type="radio" name="cyc" value="calendar" ' + (salaryMode() ? "" : "checked") + '><span><b>On a fixed day</b><br><span class="small muted">Good for pensions or if you don’t use bank SMS.</span></span></label>' +
+          '<label class="field">Usual day of the month<select id="tourDay">' + Array.from({ length: 28 }, function (_, i) { return '<option ' + (+db.settings.startDay === i + 1 ? "selected" : "") + '>' + (i + 1) + '</option>'; }).join("") + '</select></label>' +
+          '<label class="field">Monthly income after tax (optional)<input id="tourInc" inputmode="decimal" placeholder="e.g. 32 000" value="' + (+db.settings.income || "") + '"></label></div>',
+        save: function (el) {
+          var c = $('input[name="cyc"]:checked', el); if (c) db.settings.cycle = c.value;
+          db.settings.startDay = +$("#tourDay", el).value || 1;
+          var inc = Math.abs(parseAmount($("#tourInc", el).value)); if (inc) db.settings.income = inc;
+          touch(db.settings); persist(); scheduleSync();
+        } },
+      { id: "sync", icon: "🔄", title: "Phone, laptop & family", body: "Want Budgie on more than one device — or to share one budget with your partner or family? Turn on sync. Your data is locked with a private code before it leaves your phone.",
+        extra: '<div class="stack">' + (local.syncCode ? '<div class="card flat small" style="background:var(--accent-soft);border:none">✓ Sync is on. Your code: <b class="num">' + esc(local.syncCode) + '</b> <button class="btn sm" data-copy="' + esc(local.syncCode) + '" type="button">Copy</button><br><span class="muted">On another device: open Budgie → Join → enter this code.</span></div>' :
+          '<button class="btn primary block" data-tour="sync-create" type="button">Turn on sync for my devices</button><button class="btn block" data-tour="join" type="button">I have a code from another device</button>') + '</div>',
+        next: function () { return local.syncCode ? "Next" : "Skip for now"; } },
+      { id: "sms", icon: "📩", title: "Let bank SMSes fill it in", body: "Turn on SMS notifications in your banking app, and a small phone automation forwards them to Budgie. Payments appear and sort themselves — you only help when it isn’t sure.",
+        extra: local.syncCode ? '<button class="btn primary block" data-tour="sms" type="button">Show me how (2 minutes)</button>' : '<div class="card flat small" style="background:var(--surface-2);border:none">This needs sync (previous step). You can set it up later in ⚙️ Settings.</div>',
+        next: "Later" },
+      { id: "home", icon: "🏠", title: "Your Home screen", body: "The big number is what’s <b>left to spend</b> this month, and how much you can spend per day.<br><br>Each category has a bar. The thin line is <b>where you should be today</b> if you spend evenly — stay left of it.",
+        extra: mini(mockBar("Groceries", "🛒", "R 1 800", "R 4 500", 40, 52, "ok") + mockBar("Eating out", "🍔", "R 1 100", "R 1 500", 73, 52, "warn")) },
+      { id: "add", icon: "➕", title: "Adding and sorting", body: "Paid cash or something didn’t come through? Tap the big <b>+</b> button to add it.<br><br>When Budgie isn’t sure about a payment, a yellow <b>“to sort”</b> card appears — tap a category once and it remembers that shop next time.",
+        extra: mini('<div class="review-banner" style="pointer-events:none"><span class="emoji">🤔</span><span class="spacer"><b>2 transactions to sort</b><span class="small">I wasn’t sure which category — tap to help</span></span></div>') },
+      { id: "month-end", icon: "✨", title: "Each new month", body: "When your salary arrives, a new month starts with the same budget. You’ll get a short <b>recap</b> of how the month went, and ideas for next month that you can approve or change.<br><br>Have a bank statement? Upload it on the <b>Budget</b> tab to fill in anything that was missed.",
+        extra: mini('<div class="card recap-card" style="pointer-events:none"><div class="row"><span style="font-size:24px">✨</span><div class="spacer"><b>Your October recap is ready</b><div class="small" style="opacity:.85">How the month went, in 60 seconds.</div></div></div></div>') },
+      { id: "easy", icon: "🔍", title: "Bigger and simpler?", body: "<b>Easy view</b> shows bigger text and only the essentials — great for parents or anyone who wants it simple. You can switch any time in ⚙️ Settings.",
+        extra: '<div class="stack"><button class="btn block ' + (local.simple ? "primary" : "") + '" data-tour="easy-on" type="button">' + (local.simple ? "✓ " : "") + 'Yes, use Easy view</button><button class="btn block ' + (!local.simple ? "primary" : "") + '" data-tour="easy-off" type="button">' + (!local.simple ? "✓ " : "") + 'No, normal view</button></div>' },
+      { id: "done", icon: "🎉", title: "You’re all set!", body: (cats().length ? "Your budget is ready. " : "Set up your budget any time from the Home screen. ") + "Open Budgie whenever you like to see how the month is going.<br><br>You can watch this guide again in ⚙️ Settings → <b>Setup guide</b>.", next: "Start using Budgie" }
+    ];
+  }
+  function openTour(start) {
+    var el = $("#tour"), steps, idx = 0;
+    function show(i) {
+      steps = tourSteps();
+      idx = clamp(i, 0, steps.length - 1);
+      local.tourStep = idx; saveLocal();
+      var st = steps[idx], isDone = st.done && st.done();
+      var nextLabel = typeof st.next === "function" ? st.next() : st.next || (idx === steps.length - 1 ? "Finish" : "Next");
+      el.innerHTML = '<div class="tour-card" role="dialog" aria-label="Setup guide">' +
+        '<div class="tour-top"><div class="tour-dots">' + steps.map(function (_, j) { return '<i class="' + (j === idx ? "on" : j < idx ? "done" : "") + '"></i>'; }).join("") + '</div>' +
+        '<button class="icon-btn" data-tour="close" type="button" aria-label="Close guide">' + ICON.close + '</button></div>' +
+        '<div class="tour-body"><div class="tour-icon">' + st.icon + '</div><h2>' + st.title + '</h2><div class="tour-text">' + st.body + '</div>' +
+        (isDone ? '<div class="card flat small tour-ok">' + st.doneText() + '</div>' : (st.extra || "")) + '</div>' +
+        '<div class="tour-nav">' + (idx > 0 ? '<button class="btn" data-tour="back" type="button">Back</button>' : '<span></span>') +
+        '<button class="btn primary" data-tour="next" type="button">' + (st.id === "budget" && !isDone ? "Skip for now" : nextLabel) + '</button></div></div>';
+      el.scrollTop = 0;
+    }
+    function pauseFor(fn) { ui.tourResume = idx; el.hidden = true; fn(); }
+    function finish() { local.tourDone = true; delete local.tourStep; saveLocal(); el.hidden = true; el.innerHTML = ""; tour = null; render(); }
+    tour = { show: function (i) { el.hidden = false; show(i); } };
+    el.onclick = function (e) {
+      var a = e.target.closest("[data-tour]"); if (!a) return;
+      var k = a.dataset.tour, st = steps[idx];
+      if (k === "next") { if (st.save) st.save(el); if (idx === steps.length - 1) finish(); else show(idx + 1); }
+      else if (k === "back") show(idx - 1);
+      else if (k === "close") { if (st.save) st.save(el); local.tourStep = idx; saveLocal(); el.hidden = true; tour = null; render(); toast("Guide closed — reopen it any time in ⚙️ Settings"); }
+      else if (k === "skip") finish();
+      else if (k === "starter") { addStarter(); local.onboarded = true; saveLocal(); commit(); show(idx); }
+      else if (k === "sample") { loadSample(); commit(); show(idx); }
+      else if (k === "import") { ui.importForNext = false; ui.tourResume = idx; el.hidden = true; $("#fileInput").click(); setTimeout(function () { window.addEventListener("focus", function f() { window.removeEventListener("focus", f); setTimeout(function () { if (ui.tourResume != null && $("#sheetWrap").hidden) resumeTour(); }, 1200); }); }, 300); }
+      else if (k === "join") pauseFor(function () { joinSheet(); });
+      else if (k === "sms") pauseFor(function () { smsGuideSheet(); });
+      else if (k === "sync-create") { local.syncUrl = local.syncUrl || DEFAULT_SYNC_URL; local.syncCode = newCode(); saveLocal(); cryptoKey = null; syncNow(); show(idx); }
+      else if (k === "easy-on" || k === "easy-off") { local.simple = k === "easy-on"; saveLocal(); applyTheme(); show(idx); }
+    };
+    $("#installBanner").hidden = true; // the guide covers installing
+    el.hidden = false; show(start || 0);
+  }
+  function resumeTour() {
+    if (ui.tourResume == null) return;
+    var i = ui.tourResume; ui.tourResume = null;
+    setTimeout(function () { openTour(i); }, 250);
+  }
+  function maybeAutoTour() {
+    if (local.tourDone || cats().length || local.syncCode) return;
+    setTimeout(function () { if ($("#tour").hidden && $("#sheetWrap").hidden) openTour(local.tourStep || 0); }, 400);
   }
 
   // ======================================================================
@@ -1986,6 +2117,7 @@
       });
     }).then(function () {
       local.lastSync = now(); saveLocal(); syncState = "ok";
+      if (tour && !$("#tour").hidden && local.tourStep != null) tour.show(local.tourStep);
       if (JSON.stringify(db) !== before) render();
       if (newMonthTx) announceNewMonth(newMonthTx);
       else if (added) { var q = reviewQueue().length; toast("📩 " + added + " new from your bank" + (q ? " · " + q + " to sort" : ""), q ? "Sort" : null, q ? reviewSheet : null); }
@@ -2184,6 +2316,7 @@
       case "pick-file": ui.importForNext = false; $("#fileInput").click(); break;
       case "pick-statement": ui.importForNext = false; $("#fileInput").click(); break;
       case "plan": planSheet(); break;
+      case "tour": openTour(0); break;
       case "recap": var rp0 = recapPeriod(); if (rp0) openRecap(rp0); else toast("Your first recap appears once you’ve tracked a full month"); break;
       case "template": downloadFile("budgie-budget-template.csv", templateCsv(), "text/csv"); break;
       case "starter": addStarter(); local.onboarded = true; saveLocal(); commit(); toast("Added suggested categories — tweak amounts on the Budget tab"); break;
@@ -2279,7 +2412,7 @@
   (function () {
     var dismissed = false;
     try { dismissed = localStorage.getItem("budgie_install_dismissed") === "1"; } catch (e) {}
-    if (isIOS() && !isStandalone() && !dismissed) $("#installBanner").hidden = false;
+    if (isIOS() && !isStandalone() && !dismissed && (local.tourDone || cats().length)) $("#installBanner").hidden = false;
     $("#installClose").addEventListener("click", function () { $("#installBanner").hidden = true; try { localStorage.setItem("budgie_install_dismissed", "1"); } catch (e) {} });
   })();
 
@@ -2293,8 +2426,9 @@
   if (tidyUnread()) { persist(); scheduleSync(); }
   render();
   checkHash();
+  maybeAutoTour();
   syncNow();
 
   // exposed for testing in the console
-  window.Budgie = { keepUnread: keepUnread, tidyUnread: tidyUnread, unreadList: unreadList, recapData: recapData, suggestionsFor: suggestionsFor, parseStatementLines: parseStatementLines, statementFromRows: statementFromRows, statementCandidates: statementCandidates, openRecap: openRecap, planSheet: planSheet, statementSheet: statementSheet, period: period, ingestSms: ingestSms, handleFile: handleFile, parseSms: parseSms, detectBudget: detectBudget, categorise: categorise, merchantKey: merchantKey, get db() { return db; } };
+  window.Budgie = { openTour: openTour, recapSlidesEasy: recapSlidesEasy, keepUnread: keepUnread, tidyUnread: tidyUnread, unreadList: unreadList, recapData: recapData, suggestionsFor: suggestionsFor, parseStatementLines: parseStatementLines, statementFromRows: statementFromRows, statementCandidates: statementCandidates, openRecap: openRecap, planSheet: planSheet, statementSheet: statementSheet, period: period, ingestSms: ingestSms, handleFile: handleFile, parseSms: parseSms, detectBudget: detectBudget, categorise: categorise, merchantKey: merchantKey, get db() { return db; } };
 })();

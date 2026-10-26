@@ -374,7 +374,36 @@
   .st-card{background:rgba(255,255,255,.14); border-radius:16px; padding:14px 16px;} .st-card div{font-size:.8em; opacity:.85;} .st-card b{display:block; font-size:1.3em; margin:2px 0;}
   .st-pair{display:flex; gap:10px; flex-wrap:wrap;} .st-pair div{flex:1; min-width:140px; background:rgba(255,255,255,.14); border-radius:16px; padding:14px;} .st-pair b{display:block; font-size:1.5em;} .st-pair span{font-size:.82em; opacity:.85;}
   .st-actions{display:flex; flex-direction:column; gap:8px; margin-top:14px;}
+  .st-actions .btn.primary{background:#fff; color:#0f5c55;}
   .st-tap{position:absolute; top:60px; bottom:0; z-index:1;} .st-prev{left:0; width:35%;} .st-next{right:0; width:65%;}
+  /* ---------- Easy-view recap ---------- */
+  #story.easy .st-body{font-size:1.15em; gap:14px;}
+  #story.easy .st-body h1{font-size:2.2em;}
+  #story.easy .st-bars i.now b{animation:none; width:100%;}
+  .ez-num{font-size:1.6em !important; font-weight:800; opacity:1 !important;}
+  .ez-row{padding:16px 18px; font-size:1.1em;}
+  .ez-btn{font-size:1.1em; padding:16px 20px;}
+  .ez-nav{position:relative; z-index:3; display:flex; justify-content:space-between; gap:12px; max-width:520px; width:100%; margin:0 auto;}
+  .ez-nav .btn{flex:1; background:rgba(255,255,255,.2); color:#fff;}
+  /* ---------- First-run guide ---------- */
+  #tour{position:fixed; inset:0; z-index:85; background:rgba(10,14,12,.55); display:flex; align-items:center; justify-content:center; padding:calc(12px + var(--safe-t)) 12px calc(12px + var(--safe-b)); overflow-y:auto;}
+  .tour-card{background:var(--surface); width:100%; max-width:480px; max-height:100%; border-radius:24px; box-shadow:var(--shadow-lg); display:flex; flex-direction:column; overflow:hidden; animation:up .3s;}
+  .tour-top{display:flex; align-items:center; justify-content:space-between; padding:12px 12px 0 18px;}
+  .tour-dots{display:flex; gap:5px;} .tour-dots i{width:7px; height:7px; border-radius:50%; background:var(--surface-3);} .tour-dots i.done{background:var(--accent-soft);} .tour-dots i.on{background:var(--accent); width:20px; border-radius:4px;}
+  .tour-body{padding:6px 22px 14px; overflow-y:auto;}
+  .tour-icon{font-size:46px; line-height:1; margin:6px 0 10px;}
+  .tour-body h2{margin:0 0 8px; font-size:1.4em; letter-spacing:-.02em;}
+  .tour-text{color:var(--ink-soft); margin-bottom:14px;}
+  .tour-text .steps{margin-top:8px; color:var(--ink);}
+  .tour-key{display:inline-block; padding:0 6px; border-radius:6px; background:var(--surface-2); color:var(--ink);}
+  .tour-mock{background:var(--bg); border:1px solid var(--line); border-radius:16px; padding:8px 10px;}
+  .tour-opt{display:flex; gap:10px; align-items:flex-start; padding:12px; border:1.5px solid var(--line); border-radius:14px;}
+  .tour-opt input{width:20px; height:20px; accent-color:var(--accent); margin-top:2px; flex-shrink:0;}
+  .tour-opt:has(input:checked){border-color:var(--accent); background:var(--accent-soft);}
+  .tour-ok{background:var(--accent-soft); border:none; color:var(--accent-strong); font-weight:650;}
+  .tour-nav{display:flex; justify-content:space-between; gap:10px; padding:12px 18px calc(16px); border-top:1px solid var(--line);}
+  .tour-nav .btn{min-width:110px;}
+  body.simple .tour-body{font-size:1.05em;}
   body.simple .simple-hide{display:none !important;}
   body.simple .hero .big{font-size:2.8em;}
   body.simple .bar{height:14px;}
@@ -441,6 +470,7 @@
 <div id="dropOverlay" hidden><div>📄 Drop your budget spreadsheet</div></div>
 <input type="file" id="fileInput" accept=".xlsx,.xls,.csv,.ods,.numbers,.pdf" hidden>
 <div id="story" hidden role="dialog" aria-label="Month recap"></div>
+<div id="tour" hidden></div>
 <input type="file" id="backupInput" accept=".json,application/json" hidden>
 
 <div id="installBanner" hidden>
