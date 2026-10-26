@@ -1,4 +1,4 @@
-const CACHE = "budgie-v9"; // bump to force clients to refetch
+const CACHE = "budgie-v10"; // bump to force clients to refetch
 const SHELL = ["./", "./index.html", "./app.js", "./manifest.json", "./icons/icon-192.png", "./icons/icon-512.png", "./icons/apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {
@@ -16,7 +16,8 @@ self.addEventListener("fetch", (e) => {
   const sameOrigin = url.origin === self.location.origin;
   if (!sameOrigin && url.hostname !== "cdnjs.cloudflare.com") return;
   e.respondWith(
-    fetch(req).then((res) => {
+    // same-origin files: always revalidate so an update isn't hidden behind the browser's HTTP cache
+    fetch(req, sameOrigin ? { cache: "no-cache" } : undefined).then((res) => {
       if (res && res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); }
       return res;
     }).catch(() => caches.match(req).then((r) => r || caches.match("./index.html")))

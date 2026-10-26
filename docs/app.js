@@ -329,32 +329,33 @@
   // ======================================================================
   var KINDS = {
     housing: { e: "🏠", syn: ["rent", "bond", "erf", "housing", "home loan", "levy", "levies", "mortgage", "accommodation"], m: ["rent", "bond", "home loan", "levy", "levies", "body corporate", "property"] },
-    groceries: { e: "🛒", syn: ["grocer", "food", "supermarket", "household", "kos ", "kos"], m: ["checkers", "shoprite", "pick n pay", "picknpay", "pnp", "woolworths", "woolies", "spar", "food lover", "usave", "boxer", "makro", "sixty60", "ok foods", "fruit & veg", "fruit and veg", "president hyper", "cambridge food", "superspar", "kwikspar", "food store", "butcher"] },
+    groceries: { e: "🛒", syn: ["grocer", "food", "supermarket", "household", "kos", "inkopies", "kruideniers"], m: ["checkers", "shoprite", "pick n pay", "picknpay", "pnp", "woolworths", "woolies", "spar", "food lover", "usave", "boxer", "makro", "sixty60", "ok foods", "fruit & veg", "fruit and veg", "president hyper", "cambridge food", "superspar", "kwikspar", "food store", "butcher"] },
     eating: { e: "🍔", syn: ["eating", "uiteet", "kuier", "restaurant", "takeaway", "take-away", "take away", "dining", "eat out", "fast food", "meals out"], m: ["kfc", "mcdonald", "mcd ", "nando", "steers", "wimpy", "spur", "debonair", "roman", "ocean basket", "mugg", "vida e", "starbucks", "uber eats", "ubereats", "mr d", "mrd", "burger king", "pizza", "restaurant", "cafe", "coffee", "bakery", "tasha", "fishaways", "chicken licken", "galito", "rocomamas", "panarottis", "john dory", "seattle", "bootlegger", "kauai", "sushi", "grill", "bistro", "doppio", "col'cacchio", "mugg & bean", "mugg&bean"] },
     fuel: { e: "⛽", syn: ["fuel", "petrol", "diesel", "gas"], m: ["engen", "shell", "bp ", "sasol", "caltex", "totalenergies", "total ", "astron", "fuel", "garage", "puma energy", "petroport"] },
     transport: { e: "🚕", syn: ["transport", "travel", "commute", "toll"], m: ["uber", "bolt", "gautrain", "taxi", "toll", "sanral", "parking", "e-toll", "myciti", "metrorail", "flysafair", "airlink", "lift airline", "kulula", "intercape", "greyhound"] },
     car: { e: "🚗", syn: ["car ", "car", "vehicle", "auto", "maintenance", "tracker", "motor"], m: ["carwash", "car wash", "tracker", "netstar", "cartrack", "wesbank", "mfc", "vehicle finance", "tiger wheel", "supa quick", "midas", "autozone", "goldwagen", "car wash", "licence", "license renewal", "dekra"] },
-    utilities: { e: "💡", syn: ["electric", "water", "ligte", "krag", "utilit", "municipal", "rates", "power"], m: ["eskom", "city of", "municipality", "prepaid elec", "electricity", "city power", "water", "rates", "lightstone", "ekurhuleni", "tshwane", "city of joburg", "city of cape town", "municipal"] },
-    phone: { e: "📱", syn: ["phone", "cell", "internet", "wifi", "data", "airtime", "mobile", "fibre"], m: ["vodacom", "mtn", "cell c", "telkom", "rain", "afrihost", "webafrica", "airtime", "data bundle", "vumatel", "openserve", "coolideas", "mweb", "herotel", "frogfoot"] },
-    insurance: { e: "🛡️", syn: ["insurance", "cover", "assurance", "funeral", "pps", "naked", "outsurance"], m: ["naked insurance", "kingprice", "pps", "insurance", "outsurance", "santam", "old mutual", "sanlam", "liberty", "discovery life", "momentum", "king price", "miway", "hollard", "budget ins", "1life", "first for women", "dial direct", "auto & general", "clientele", "avbob", "assupol"] },
-    medical: { e: "💊", syn: ["medical", "health", "pharmacy", "doctor", "medicine", "aid"], m: ["radiology", "dentist", "dentistry", "unicare", "medirite", "physio", "dis-chem", "dischem", "clicks", "pharmacy", "doctor", "dr ", "medical", "hospital", "netcare", "mediclinic", "life healthcare", "discovery health", "bonitas", "gems", "fedhealth", "bestmed", "medshield", "dentist", "optometrist", "spec-savers", "specsavers", "pathcare", "lancet"] },
+    utilities: { e: "💡", syn: ["electric", "elektrisiteit", "prepaid", "water", "ligte", "krag", "utilit", "municipal", "rates", "power"], m: ["eskom", "city of", "municipality", "prepaid elec", "electricity", "city power", "water", "rates", "lightstone", "ekurhuleni", "tshwane", "city of joburg", "city of cape town", "municipal"] },
+    phone: { e: "📱", syn: ["phone", "cell", "cellphone", "selfoon", "mtn", "vodacom", "telkom", "internet", "wifi", "data", "airtime", "mobile", "fibre"], m: ["vodacom", "mtn", "cell c", "telkom", "rain", "afrihost", "webafrica", "airtime", "data bundle", "vumatel", "openserve", "coolideas", "mweb", "herotel", "frogfoot"] },
+    insurance: { e: "🛡️", syn: ["insurance", "versekering", "cover", "assurance", "funeral", "pps", "naked", "outsurance", "metrop", "metropolitan", "liberty", "discovery"], m: ["naked insurance", "kingprice", "pps", "insurance", "outsurance", "santam", "old mutual", "sanlam", "liberty", "discovery life", "momentum", "king price", "miway", "hollard", "budget ins", "1life", "first for women", "dial direct", "auto & general", "clientele", "avbob", "assupol"] },
+    medical: { e: "💊", syn: ["medical", "health", "pharmacy", "doctor", "medicine", "medical aid", "medisyne", "medisyne", "dokter", "apteek"], m: ["radiology", "dentist", "dentistry", "unicare", "medirite", "physio", "dis-chem", "dischem", "clicks", "pharmacy", "doctor", "dr ", "medical", "hospital", "netcare", "mediclinic", "life healthcare", "discovery health", "bonitas", "gems", "fedhealth", "bestmed", "medshield", "dentist", "optometrist", "spec-savers", "specsavers", "pathcare", "lancet"] },
     subscriptions: { e: "📺", syn: ["subscription", "streaming", "netflix", "apps", "software", "tv"], m: ["render.com", "vercel", "github", "netlify", "google one", "netflix", "showmax", "shomax", "apple music", "covenant eyes", "spotify", "apple.com", "itunes", "google", "youtube", "dstv", "multichoice", "disney", "prime video", "amazon prime", "icloud", "microsoft", "openai", "chatgpt", "anthropic", "claude.ai", "adobe", "deezer", "playstation plus", "xbox game pass", "canva"] },
     shopping: { e: "🛍️", syn: ["shopping", "klere", "aankope", "clothes", "clothing", "personal", "fashion", "household items"], m: ["takealot", "superbalist", "mr price", "mrp", "ackermans", "pep ", "pepstores", "edgars", "foschini", "truworths", "h&m", "cotton on", "game ", "builders", "incredible connection", "amazon", "shein", "temu", "sportscene", "totalsports", "cna", "exclusive books", "markham", "jet ", "identity", "woolworths clothing", "zara", "bash", "makro", "hifi corp", "istore", "dion wired", "loot", "yuppiechef", "mr price home", "sheet street", "@home", "decofurn", "leroy merlin", "cashbuild", "mica"] },
     entertainment: { e: "🎉", syn: ["entertainment", "events", "fun", "leisure", "hobbies", "going out", "social"], m: ["ster-kinekor", "ster kinekor", "nu metro", "computicket", "ticketpro", "quicket", "howler", "steam", "playstation", "xbox", "bowling", "tops", "liquor", "bottle store", "pub", "bar ", "tavern", "casino"] },
     personal: { e: "💇", syn: ["personal care", "beauty", "hair", "grooming", "toiletries"], m: ["salon", "barber", "hair", "nails", "spa", "beauty"] },
     fitness: { e: "🏋️", syn: ["gym", "fitness", "sport", "exercise", "training", "trainer", "personal training"], m: ["virgin active", "planet fitness", "gym", "crossfit", "parkrun", "strava", "zwift", "sweat1000"] },
-    education: { e: "🎓", syn: ["education", "school", "study", "fees", "tuition", "kids"], m: ["school", "university", "unisa", "varsity", "college", "tuition", "udemy", "coursera"] },
+    education: { e: "🎓", syn: ["education", "school", "school fees", "study", "tuition", "kids"], m: ["school", "university", "unisa", "varsity", "college", "tuition", "udemy", "coursera"] },
     savings: { e: "🏦", syn: ["saving", "invest", "emergency", "retirement", "tfsa", "goal"], m: ["savings", "invest", "easyequities", "easy equities", "satrix", "tfsa", "allan gray", "coronation", "10x", "sygnia", "etfsa", "retirement annuity"] },
-    giving: { e: "🎁", syn: ["gift", "giving", "donation", "charity", "church", "tithe"], m: ["tiende", "dankoffer", "offering", "church", "tithe", "donation", "givengain", "backabuddy", "charity"] },
-    pets: { e: "🐾", syn: ["pet", "dog", "cat", "vet"], m: ["vet", "pet", "petshop", "petworld", "absolute pets", "montana pet"] },
-    fees: { e: "🏧", syn: ["bankfees", "bank fees", "bankfee", "bank fee", "fees", "charges", "bank charges", "interest"], m: ["fee", "service charge", "monthly acc", "admin charge", "interest charged", "sms notif", "cash dep fee"] },
-    cash: { e: "💵", syn: ["cash", "atm", "withdrawal"], m: ["atm", "cash withdrawal", "cash wd", "withdrawal", "cash send"] },
+    giving: { e: "🎁", syn: ["gift", "gifts", "giving", "donation", "charity", "church", "tithe"], m: ["tiende", "dankoffer", "offering", "church", "tithe", "donation", "givengain", "backabuddy", "charity"] },
+    pets: { e: "🐾", syn: ["pet", "pets", "diere", "dog", "cat", "vet"], m: ["vet", "pet", "petshop", "petworld", "absolute pets", "montana pet"] },
+    fees: { e: "🏧", syn: ["fees", "card fees", "account fees", "bankfees", "bank fees", "bankfee", "bank fee", "bankkoste", "overdraft", "credit life", "fees", "charges", "bank charges", "interest"], m: ["fee", "service charge", "monthly acc", "admin charge", "interest charged", "sms notif", "cash dep fee"] },
+    cash: { e: "💵", syn: ["cash", "kontant", "atm", "withdrawal"], m: ["atm", "cash withdrawal", "cash wd", "withdrawal", "cash send"] },
     coffee: { e: "☕", parent: "eating", syn: ["koffie", "coffee"], m: ["vida e", "seattle", "mugg & bean", "mugg&bean", "starbucks", "merkava", "coffeeworks", "coffee", "caffe", "bootleggers", "grounds", "doppio", "seattle coffee", "kauai"] },
     parking: { e: "🅿️", parent: "transport", syn: ["parking"], m: ["parking", "prime park", "parkade", "wilson parking", "v a waterfront"] },
     rideshare: { e: "🚕", parent: "transport", syn: ["uber", "bolt", "taxi"], m: ["uber", "bolt", "taxify", "didi"] },
     family: { e: "👪", syn: ["pappa", "mamma", "family", "parents", "mom", "dad", "ouers"], m: [] },
-    home: { e: "🧹", syn: ["housekeeping", "domestic", "cleaning", "huishou"], m: [] },
-    debt: { e: "💳", syn: ["debt", "loan", "credit card", "repayment", "store card"], m: ["loan", "credit card", "repayment", "store card", "personal loan", "edgars account", "truworths account"] }
+    home: { e: "🧹", syn: ["housekeeping", "domestic", "cleaning", "huishou", "lone", "huishulp", "wages"], m: [] },
+    security: { e: "🚨", syn: ["security", "alarm", "armed response", "adt"], m: ["adt", "fidelity", "chubb"] },
+    debt: { e: "💳", syn: ["debt", "loan", "loans", "credit card", "repayment", "store card"], m: ["loan", "credit card", "repayment", "store card", "personal loan", "edgars account", "truworths account"] }
   };
   // "fee" must not match "coffee", "spa" not "spar", "pet" not "petrol"
   var KW_CACHE = {};
@@ -365,14 +366,15 @@
   }
   function guessKind(name) {
     var n = " " + String(name || "").toLowerCase() + " ";
-    var best = null, bestLen = 0;
+    var best = null, bestLen = 0, bestPos = -1;
     Object.keys(KINDS).forEach(function (k) {
-      KINDS[k].syn.forEach(function (s) { if (n.indexOf(s) > -1 && s.length > bestLen) { best = k; bestLen = s.length; } });
+      // longest match wins; on a tie the later word wins ("Discovery card fees" is about fees)
+      KINDS[k].syn.forEach(function (s) { var t = s.trim(), pos = n.lastIndexOf(t); if (kwIn(n, s) && (t.length > bestLen || (t.length === bestLen && pos > bestPos))) { best = k; bestLen = t.length; bestPos = pos; } });
     });
     if (best) return best;
     // category named after a company ("Netflix", "King Price", "Telkom")
     Object.keys(KINDS).forEach(function (k) {
-      KINDS[k].m.forEach(function (m) { var mm = m.trim(); if (mm.length > 3 && n.indexOf(" " + mm) > -1 && mm.length > bestLen) { best = k; bestLen = mm.length; } });
+      KINDS[k].m.forEach(function (m) { var mm = m.trim(); if (mm.length >= 3 && mm.length > bestLen && kwIn(n, mm)) { best = k; bestLen = mm.length; } });
     });
     return best;
   }
@@ -411,6 +413,9 @@
     if (kwHits.length === 1) return { catId: kwHits[0].id, confidence: 0.92, suggest: [kwHits[0].id], reason: "Matches your keyword" };
     // a category called "Netflix" or "King Price" catches that merchant
     var mCompact = merch.replace(/[^a-z]/g, ""), mFirst = (merch.trim().split(/\s+/)[0] || "").replace(/[^a-z]/g, "");
+    // an exact category name in the description beats looser matches ("Google One" vs "Google 24com")
+    var exactHits = all.filter(function (c) { var n = cleanName(c.name).toLowerCase(); return n.length >= 3 && new RegExp("(^|[^a-z])" + n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "([^a-z]|$)").test(merch); });
+    if (exactHits.length === 1) return { catId: exactHits[0].id, confidence: 0.9, suggest: [exactHits[0].id], reason: "Matches your “" + exactHits[0].name + "” category" };
     var nameHits = all.filter(function (c) {
       var n = cleanName(c.name).toLowerCase(); if (n.length < 3) return false;
       if (new RegExp("(^|[^a-z])" + n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "([^a-z]|$)").test(merch)) return true;
@@ -1777,16 +1782,16 @@
             var best = null, scored = [];
             wb.SheetNames.forEach(function (sn, idx) {
               var rows = X.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: true, defval: "" });
-              scored.push({ rows: rows, score: detectBudget(rows).items.length, when: sheetMonth(sn), idx: idx });
+              scored.push({ name: sn, rows: rows, score: detectBudget(rows).items.length, when: sheetMonth(sn), idx: idx });
             });
-            var top = Math.max.apply(null, scored.map(function (x) { return x.score; }).concat([0]));
-            var good = scored.filter(function (x) { return x.score > 0 && x.score >= top * 0.6; });
-            good.sort(function (a, b) { return (b.when || 0) - (a.when || 0) || b.score - a.score || a.idx - b.idx; });
+            // newest month first; same month → the leftmost tab (where Numbers puts new sheets)
+            var good = scored.filter(function (x) { return x.score >= 3; });
+            good.sort(function (a, b) { return (b.when || 0) - (a.when || 0) || a.idx - b.idx; });
             if (good.length) best = good[0].rows;
             var stRows = null;
             wb.SheetNames.some(function (sn) { stRows = statementFromRows(X.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: true, defval: "" })); return !!stRows; });
             if (stRows && !ui.importForNext && (!best || detectBudget(best).items.length < 3)) statementSheet(stRows, file.name);
-            else importRows(best || [], file.name);
+            else importRows(best || [], file.name, good.map(function (g) { return { name: g.name, rows: g.rows }; }));
           } catch (e) { toast("Couldn't read that file: " + e.message); }
         };
         reader.readAsArrayBuffer(file);
@@ -1908,8 +1913,8 @@
     return { items: items, incomeItems: incomeItems, cols: cols };
   }
 
-  function importRows(rows, fname) {
-    var det = detectBudget(rows);
+  function importRows(rows, fname, sheets) {
+    var det = detectBudget(rows), sheetIdx = 0;
     if (!det.items.length) { toast("I couldn't find categories and amounts in that file. Try the template."); return; }
     var mode = cats().length ? "merge" : "replace";
     var when = cats().length && ui.importForNext ? "next" : "now";
@@ -1940,6 +1945,7 @@
       var off = det.items.length - on.length;
       var nx = nextMonthStart();
       var html = sheetHead("Import budget", esc(fname) + " · " + det.items.length + " categories" + (det.incomeItems.length ? " + income" : "")) +
+        (sheets && sheets.length > 1 ? '<label class="field" style="margin-bottom:10px">Sheet<select id="impSheet">' + sheets.map(function (sh, i) { return '<option value="' + i + '"' + (i === sheetIdx ? " selected" : "") + '>' + esc(sh.name) + '</option>'; }).join("") + '</select></label>' : "") +
         (cats().length ? '<div class="small muted" style="font-weight:600;margin-bottom:6px">Start using it</div><div class="seg" id="impWhen" style="margin-bottom:10px"><button type="button" data-w="now" class="' + (when === "now" ? "on" : "") + '">Now</button><button type="button" data-w="next" class="' + (when === "next" ? "on" : "") + '">From next payday · ' + shortDay(nx) + '</button></div>' : "") +
         (cats().length ? '<div class="seg" id="impMode" style="margin-bottom:12px"><button type="button" data-m="merge" class="' + (mode === "merge" ? "on" : "") + '">Add & update</button><button type="button" data-m="replace" class="' + (mode === "replace" ? "on" : "") + '">Replace all</button></div>' : "") +
         (off ? '<p class="small muted" style="margin:0 0 8px">' + off + ' item' + (off > 1 ? "s have" : " has") + ' no budget amount, so ' + (off > 1 ? "they’re" : "it’s") + ' unticked — tick to track them anyway.</p>' : "") +
@@ -1955,6 +1961,11 @@
         $$("[data-w]", el).forEach(function (b) { b.onclick = function () { when = b.dataset.w; draw(); }; });
         el.onchange = function (e) {
           var inp = e.target;
+          if (inp.id === "impSheet") {
+            var nd = detectBudget(sheets[+inp.value].rows);
+            if (!nd.items.length) { toast("No categories found on that sheet"); inp.value = sheetIdx; return; }
+            sheetIdx = +inp.value; det = nd; draw(); return;
+          }
           if (inp.dataset.j != null) {
             var ii = det.incomeItems[+inp.dataset.j];
             if (inp.dataset.f === "on") ii.on = inp.checked; else { ii.amount = Math.abs(parseAmount(inp.value)) || 0; ii.on = ii.amount > 0; }
