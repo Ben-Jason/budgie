@@ -1643,8 +1643,11 @@
       { id: "install", icon: "📲", title: standalone ? "You’re using the app ✓" : "Put Budgie on your Home Screen",
         body: standalone ? "Budgie is installed, so it opens full-screen like any other app." :
           ios ? "<b>Do this first</b> — on iPhone the Home Screen app keeps its own data, separate from Safari.<ol class=\"steps\"><li>Tap the <b>Share</b> button <span class=\"tour-key\">⬆︎</span> at the bottom of Safari.</li><li>Scroll down and tap <b>Add to Home Screen</b>, then <b>Add</b>.</li><li>Close Safari and open <b>Budgie</b> from your Home Screen — this guide continues there.</li></ol>" :
-          android ? "<ol class=\"steps\"><li>Tap the <b>⋮</b> menu at the top right of Chrome.</li><li>Tap <b>Install app</b> (or <b>Add to Home screen</b>).</li><li>Open Budgie from your Home screen.</li></ol>" :
+          android && isSamsungBrowser() ? "You’re in <b>Samsung Internet</b>. Installing from here makes Android warn that the app was “built for an older version of Android” — that’s about Samsung’s installer, not Budgie. Open Budgie in <b>Chrome</b> for a clean install:" :
+          android ? (ui.installEvt ? "Tap the button below — Budgie installs like any other app." : "<ol class=\"steps\"><li>Tap the <b>3-dot menu</b> at the top right of Chrome.</li><li>Tap <b>Install app</b> (or <b>Add to Home screen</b>).</li><li>Open Budgie from your Home screen.</li></ol>") :
           "On a laptop, click the <b>install</b> icon at the right of Chrome’s address bar (or Safari → File → <b>Add to Dock</b>). You can also just bookmark this page.",
+        extra: standalone ? "" : android && isSamsungBrowser() ? '<a class="btn primary block" href="' + esc(chromeIntentUrl()) + '">Open in Chrome</a><p class="small faint" style="margin:8px 0 0">No Chrome? Install it from the Play Store, or continue here — the warning is safe to accept.</p>' :
+          ui.installEvt ? '<button class="btn primary block" data-tour="install" type="button">📲 Install Budgie</button>' : "",
         next: standalone ? "Next" : "Done, or later" },
       { id: "budget", icon: "📋", title: "Set up your budget", body: "A budget is a list of categories (like Groceries or Petrol) with an amount for each month. Pick the easiest way to start:",
         extra: '<div class="stack"><button class="btn primary block" data-tour="import" type="button">📄 Import my spreadsheet (Excel, Numbers, CSV)</button>' +
@@ -1712,6 +1715,7 @@
       else if (k === "sample") { loadSample(); commit(); show(idx); }
       else if (k === "import") { ui.importForNext = false; ui.tourResume = idx; el.hidden = true; $("#fileInput").click(); setTimeout(function () { window.addEventListener("focus", function f() { window.removeEventListener("focus", f); setTimeout(function () { if (ui.tourResume != null && $("#sheetWrap").hidden) resumeTour(); }, 1200); }); }, 300); }
       else if (k === "join") pauseFor(function () { joinSheet(); });
+      else if (k === "install") promptInstall();
       else if (k === "sms") pauseFor(function () { smsGuideSheet(); });
       else if (k === "sync-create") { local.syncUrl = local.syncUrl || DEFAULT_SYNC_URL; local.syncCode = newCode(); saveLocal(); cryptoKey = null; syncNow(); show(idx); }
       else if (k === "easy-on" || k === "easy-off") { local.simple = k === "easy-on"; saveLocal(); applyTheme(); show(idx); }
@@ -2289,6 +2293,19 @@
     if (local.simple && ui.tab === "insights") ui.tab = "home";
   }
   function isStandalone() { return window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches; }
+  // Samsung Internet wraps installed web apps in an outdated Android package that Play Protect warns about;
+  // Chrome builds a current one. Offer a one-tap hop to Chrome on Samsung's browser.
+  function isSamsungBrowser() { return /SamsungBrowser/i.test(navigator.userAgent); }
+  function chromeIntentUrl() {
+    return "intent://" + location.host + location.pathname + "#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=" + encodeURIComponent(location.origin + location.pathname) + ";end";
+  }
+  // Chrome's own install prompt, so nobody has to find the 3-dot menu
+  window.addEventListener("beforeinstallprompt", function (e) { e.preventDefault(); ui.installEvt = e; if (tour && !$("#tour").hidden && local.tourStep === 1) tour.show(1); showInstallBanner(); });
+  window.addEventListener("appinstalled", function () { ui.installEvt = null; $("#installBanner").hidden = true; toast("Budgie is installed — open it from your Home screen"); });
+  function promptInstall() {
+    var e = ui.installEvt; if (!e) return;
+    e.prompt(); e.userChoice.then(function () { ui.installEvt = null; if (tour && !$("#tour").hidden) tour.show(local.tourStep); });
+  }
   function isIOS() { return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }
 
   // ======================================================================
@@ -2419,13 +2436,22 @@
     if (params.join) { history.replaceState(null, "", location.pathname); joinSheet({ code: params.join, server: params.server }); }
   }
 
-  // install banner
-  (function () {
+  // install banner: iPhone Safari, Samsung Internet (→ Chrome), or Chrome's own install prompt
+  function showInstallBanner() {
     var dismissed = false;
     try { dismissed = localStorage.getItem("budgie_install_dismissed") === "1"; } catch (e) {}
-    if (isIOS() && !isStandalone() && !dismissed && (local.tourDone || cats().length)) $("#installBanner").hidden = false;
-    $("#installClose").addEventListener("click", function () { $("#installBanner").hidden = true; try { localStorage.setItem("budgie_install_dismissed", "1"); } catch (e) {} });
-  })();
+    if (isStandalone() || dismissed || !(local.tourDone || cats().length)) return;
+    var b = $("#installBanner div");
+    if (/android/i.test(navigator.userAgent) && isSamsungBrowser()) {
+      b.innerHTML = '<b>Install Budgie from Chrome</b><p>Samsung Internet’s installer triggers an Android warning. Open in Chrome for a clean install.</p><a class="btn sm" href="' + esc(chromeIntentUrl()) + '" style="margin-top:8px;background:#fff;color:#0f5c55">Open in Chrome</a>';
+    } else if (ui.installEvt) {
+      b.innerHTML = '<b>Install Budgie</b><p>Add it to your Home screen — it opens full-screen like a real app.</p><button class="btn sm" type="button" id="installNow" style="margin-top:8px;background:#fff;color:#0f5c55">Install</button>';
+      $("#installNow").onclick = promptInstall;
+    } else if (!isIOS()) return;
+    $("#installBanner").hidden = false;
+  }
+  showInstallBanner();
+  $("#installClose").addEventListener("click", function () { $("#installBanner").hidden = true; try { localStorage.setItem("budgie_install_dismissed", "1"); } catch (e) {} });
 
   if ("serviceWorker" in navigator && location.protocol !== "file:") {
     window.addEventListener("load", function () { navigator.serviceWorker.register("sw.js").catch(function () {}); });
