@@ -74,7 +74,7 @@
     return {
       v: 1,
       settings: { currency: "ZAR", startDay: 1, income: 0, cycle: "salary", salaryWords: "", updatedAt: 0 },
-      categories: [], transactions: [], rules: [], unread: [], paydays: [], pending: [], history: []
+      categories: [], transactions: [], rules: [], unread: [], paydays: [], pending: [], history: [], templates: []
     };
   }
   function load() {
@@ -940,6 +940,7 @@
       (inc && inc - total > 0 ? '<p class="small faint" style="margin:8px 0 0">Tip: give every rand a job — put the extra into savings or a goal category.</p>' : "") + '</div>';
     var nSug = cats().length ? suggestionsFor(planBasis()).length : 0;
     if (cats().length) h += '<button class="review-banner" data-act="plan" type="button" style="background:var(--accent-soft);color:var(--accent-strong)"><span class="emoji">🧭</span><span class="spacer"><b>Plan next month</b><span class="small">' + (nSug ? nSug + " suggested change" + (nSug > 1 ? "s" : "") + " based on " + esc(planBasis().label) + " — approve or edit" : "Review and adjust any category") + '</span></span>' + ICON.chev + '</button>';
+    h += '<div class="card"><div class="card-h"><h3>📤 Export to Excel</h3></div><p class="small muted" style="margin-top:0">Budget vs actual for any months you choose — one sheet per month' + (savedTemplate() ? ', in the same layout as your spreadsheet' : '') + '.</p><button class="btn sm primary" data-act="export-xlsx" type="button">Export</button></div>';
     h += '<div class="card"><div class="card-h"><h3>🏦 Bank statement</h3></div><p class="small muted" style="margin-top:0">Started mid-month or missed some SMSes? Upload a statement (PDF or CSV) — I’ll add everything from your salary onward, sort it, and skip what’s already here.</p><button class="btn sm primary" data-act="pick-statement" type="button">Upload statement</button></div>';
     h += '<div class="drop" id="dropZone"><div class="emoji">📄</div><b>Drop an Excel or CSV budget here</b><p class="small muted" style="margin:4px 0 12px">Columns like <i>Category</i> and <i>Amount</i>. You’ll get a preview before anything changes.</p>' +
       '<div class="row" style="justify-content:center;gap:8px" ><button class="btn sm primary" data-act="pick-file" type="button">Choose file</button><button class="btn sm" data-act="template" type="button">Get a template</button></div></div>';
@@ -995,7 +996,7 @@
     h += '</div><div>';
     h += '<div class="card"><div class="card-h"><h3>Your data</h3></div><div class="row wrap">' +
       '<button class="btn sm" data-act="export" type="button">⬇️ Download backup</button><button class="btn sm" data-act="import-backup" type="button">⬆️ Restore backup</button>' +
-      '<button class="btn sm" data-act="export-csv" type="button">Transactions as CSV</button></div>' +
+      '<button class="btn sm" data-act="export-csv" type="button">Transactions as CSV</button><button class="btn sm" data-act="export-xlsx" type="button">📤 Budget vs actual (Excel)</button></div>' +
       '<p class="small faint">Learned merchant rules: ' + db.rules.filter(function (r) { return !r.deleted; }).length + ' · Transactions: ' + txs().length + '</p>' +
       '<button class="btn sm danger" data-act="wipe" type="button">Erase everything on this device</button></div>';
     h += '<p class="small faint" style="text-align:center">Budgie · made for you · v1.0</p>';
@@ -1345,7 +1346,8 @@
       if (c.type !== "expense" || c.fee) return;
       var g = { merchant: c.merchant, raw: c.raw, type: "expense" }; applyCategory(g); c.catId = g.catId; c.needsReview = g.needsReview; c.suggest = g.suggest;
     });
-    var feeCat = cats().filter(function (x) { return (x.kind || guessKind(x.name)) === "fees"; })[0];
+    var feeCats = cats().filter(function (x) { return guessKind(x.name + " " + (x.group || "")) === "fees"; });
+    var feeCat = feeCats.filter(function (x) { return /bank\s?(fees?|charges|koste)/i.test(x.name); })[0] || feeCats[0];
     var salaries = cands.filter(function (c) { return c.salary; }).sort(function (a, b) { return a.date < b.date ? 1 : -1; });
     var earliest = cands.reduce(function (m, c) { return c.date < m ? c.date : m; }, "9999");
     var latest = cands.reduce(function (m, c) { return c.date > m ? c.date : m; }, "0000");
@@ -1734,6 +1736,290 @@
   }
 
   // ======================================================================
+  // Excel export: one sheet per month, budget vs actual, in the user's own
+  // layout (remembered from their import) or one of three ready formats.
+  // ======================================================================
+  var EXCELJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js";
+
+  // Layout of an imported sheet: where each section, row and total sits.
+  function templateFromBlocks(grid, blocks, sheetName, fname) {
+    var secs = blocks.filter(function (b) { return b.kind !== "skip"; }).map(function (b) {
+      var rows = b.items.map(function (it) { return { name: cleanName(it.name), r: it.r, amount: isNumCell(it.v) ? Math.round(Math.abs(parseAmount(it.v)) * 100) / 100 : 0 }; })
+        .filter(function (x) { return x.name && !SKIP_NAME.test(x.name); });
+      var last = rows.length ? rows[rows.length - 1].r : b.r;
+      var totalR = null;
+      for (var rr = last + 1; rr < Math.min(last + 6, grid.length); rr++) {
+        var row = grid[rr] || [];
+        if (isNumCell(row[b.c + 1]) && !cellText(row[b.c])) { totalR = rr; break; }
+      }
+      return { title: cellText((grid[b.r] || [])[b.c]) || b.header, kind: b.kind, r: b.r, c: b.c, rows: rows, totalR: totalR };
+    });
+    return secs.length ? { id: "tpl_main", sheet: sheetName || "", fname: fname || "", sections: secs } : null;
+  }
+  function saveTemplate(tpl) {
+    if (!tpl) return;
+    tpl.sections.forEach(function (sec) {
+      if (sec.kind === "income") return;
+      sec.rows.forEach(function (row) { var c = cats().filter(function (x) { return x.name.toLowerCase() === row.name.toLowerCase(); })[0]; if (c) row.catId = c.id; });
+    });
+    db.templates = (db.templates || []).filter(function (t) { return t.id !== tpl.id; });
+    db.templates.push(touch(tpl));
+  }
+  function savedTemplate() { return (db.templates || []).filter(function (t) { return !t.deleted; })[0] || null; }
+
+  // Months that have data, oldest → newest
+  function exportMonths() {
+    var all = txs(); if (!all.length) return [period(0)];
+    var earliest = all.reduce(function (m, t) { return t.date < m ? t.date : m; }, "9999"), out = [];
+    for (var o = 0; o > -60; o--) { var p = period(o); out.unshift(p); if (p.s <= earliest) break; }
+    return out;
+  }
+
+  // The numbers for one month, arranged as sections.
+  function monthSections(p, fmt, tpl) {
+    var s = stats(p), used = {}, catsList = cats();
+    var resolve = function (row) { var c = row.catId && cat(row.catId); if (!c) c = catsList.filter(function (x) { return x.name.toLowerCase() === row.name.toLowerCase(); })[0]; return c || null; };
+    var incomeTx = s.list.filter(function (t) { return t.type === "income"; });
+    var secs = [];
+    if (fmt === "mine" && tpl) {
+      tpl.sections.forEach(function (sec) {
+        var out = { title: sec.title, kind: sec.kind, r: sec.r, c: sec.c, totalR: sec.totalR, rows: [] };
+        if (sec.kind === "income") {
+          var left = incomeTx.slice(), biggest = null;
+          sec.rows.forEach(function (row) {
+            var key = row.name.toLowerCase(), mine = left.filter(function (t) { return key.length >= 3 && ((t.merchant || "") + " " + (t.raw || "")).toLowerCase().indexOf(key) > -1; });
+            left = left.filter(function (t) { return mine.indexOf(t) < 0; });
+            var x = { name: row.name, r: row.r, budget: row.amount || null, actual: mine.reduce(function (a, t) { return a + t.amount; }, 0) };
+            if (!biggest || (row.amount || 0) > (biggest.budget || 0)) biggest = x;
+            out.rows.push(x);
+          });
+          if (biggest) biggest.actual += left.reduce(function (a, t) { return a + t.amount; }, 0);
+        } else {
+          sec.rows.forEach(function (row) {
+            var c = resolve(row);
+            if (c) used[c.id] = 1;
+            out.rows.push({ name: c ? c.name : row.name, r: row.r, budget: c ? budgetFor(c, p) : null, actual: c ? (s.by[c.id] || 0) : null });
+          });
+        }
+        secs.push(out);
+      });
+      var extra = catsList.filter(function (c) { return !used[c.id]; });
+      if (extra.length || s.uncategorised) secs.push({ title: "Added in Budgie", kind: "extra", rows: extra.map(function (c) { return { name: c.name, budget: budgetFor(c, p), actual: s.by[c.id] || 0 }; })
+        .concat(s.uncategorised ? [{ name: "Not sorted yet", budget: null, actual: s.uncategorised }] : []) });
+      return secs;
+    }
+    // generic formats: income first, then the app's groups
+    secs.push({ title: "Income", kind: "income", rows: [{ name: "Income", budget: incomeFor(p), actual: s.income }] });
+    groups().forEach(function (g) {
+      var list = catsList.filter(function (c) { return (c.group || "Expenses") === g; });
+      var kind = /saving|invest|spaar|beleg/i.test(g) ? "savings" : list.every(isFixed) ? "fixed" : "variable";
+      secs.push({ title: g, kind: kind, rows: list.map(function (c) { return { name: c.name, budget: budgetFor(c, p), actual: s.by[c.id] || 0 }; }) });
+    });
+    if (s.uncategorised) secs.push({ title: "Not sorted", kind: "extra", rows: [{ name: "Not sorted yet", budget: null, actual: s.uncategorised }] });
+    return secs;
+  }
+
+  var XL = {
+    fixed: ["FFF4C542", "FFFFF6D5"], variable: ["FF8DB8EE", "FFE6F0FC"], savings: ["FF7088DA", "FFE1E6F8"],
+    income: ["FF6DBA5E", "FFE2F2DC"], exception: ["FFEB6A3E", "FFFBE3D7"], extra: ["FFB9B6AE", "FFF1EFEA"], actual: ["FFE5533D", "FFF9D6D1"]
+  };
+  var RAND = '"R" #,##0.00';
+  function colL(n) { var s = ""; while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
+  function fill(cell, argb) { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb } }; }
+
+  function writeMonth(wb, p, fmt, tpl) {
+    var name = p.label.replace(/[\\\/?*\[\]:]/g, "").slice(0, 31);
+    var ws = wb.addWorksheet(name);
+    var secs = monthSections(p, fmt, tpl), s = stats(p), maxRow = 2, maxCol = 3;
+    ws.getCell("A1").value = p.label + " · budget vs actual" + (p.sub ? " (" + p.sub.replace(/ \(est\.\)/, "") + ")" : "");
+    ws.getCell("A1").font = { bold: true, size: 14 };
+    if (p.offset < 0 && !histFor(p)) { ws.getCell("A2").value = "Budget shown as it is today — Budgie has no record of this month’s budget."; ws.getCell("A2").font = { italic: true, color: { argb: "FF8A918C" } }; }
+    if (!s.list.length) { ws.getCell("A2").value = "No transactions recorded for this month."; ws.getCell("A2").font = { italic: true, color: { argb: "FF8A918C" } }; }
+
+    var place = function (sec, r0, c0) {   // r0, c0: 1-based header position
+      var col = XL[sec.kind] || XL.extra;
+      var h = ws.getCell(r0, c0), hb = ws.getCell(r0, c0 + 1), ha = ws.getCell(r0, c0 + 2);
+      h.value = sec.title; hb.value = "Budget"; ha.value = "Actual";
+      [h, hb].forEach(function (c) { fill(c, col[0]); c.font = { bold: true }; }); fill(ha, XL.actual[0]); ha.font = { bold: true };
+      var first = null, last = null;
+      sec.rows.forEach(function (row, i) {
+        var r = row.r != null ? row.r + 1 : r0 + 1 + i;
+        first = first == null ? r : Math.min(first, r); last = last == null ? r : Math.max(last, r);
+        var n = ws.getCell(r, c0), b = ws.getCell(r, c0 + 1), a = ws.getCell(r, c0 + 2);
+        n.value = row.name; fill(n, col[1]); fill(b, col[1]); fill(a, XL.actual[1]);
+        if (row.budget != null) { b.value = Math.round(row.budget * 100) / 100; b.numFmt = RAND; }
+        if (row.actual != null) { a.value = Math.round(row.actual * 100) / 100; a.numFmt = RAND; if (sec.kind !== "income" && row.budget != null && row.actual > row.budget + 0.5) a.font = { color: { argb: "FFB3261E" }, bold: true }; }
+      });
+      if (first == null) { first = last = r0 + 1; }
+      var tr = sec.totalR != null ? sec.totalR + 1 : last + 1;
+      var sumB = sec.rows.reduce(function (x, y) { return x + (y.budget || 0); }, 0), sumA = sec.rows.reduce(function (x, y) { return x + (y.actual || 0); }, 0);
+      var tb = ws.getCell(tr, c0 + 1), ta = ws.getCell(tr, c0 + 2), tn = ws.getCell(tr, c0);
+      if (!tn.value) tn.value = "Total";
+      var anyBudget = sec.rows.some(function (y) { return y.budget != null; });
+      if (anyBudget) tb.value = { formula: "SUM(" + colL(c0 + 1) + first + ":" + colL(c0 + 1) + last + ")", result: Math.round(sumB * 100) / 100 };
+      ta.value = { formula: "SUM(" + colL(c0 + 2) + first + ":" + colL(c0 + 2) + last + ")", result: Math.round(sumA * 100) / 100 };
+      [tn, tb, ta].forEach(function (c) { c.font = { bold: true }; c.border = { top: { style: "thin" } }; });
+      tb.numFmt = ta.numFmt = RAND;
+      maxRow = Math.max(maxRow, tr); maxCol = Math.max(maxCol, c0 + 2);
+      return { kind: sec.kind, budgetCell: colL(c0 + 1) + tr, actualCell: colL(c0 + 2) + tr, sumB: sumB, sumA: sumA };
+    };
+
+    var placed = [];
+    if (fmt === "table") {
+      ["Category", "Group", "Budget", "Actual", "Difference"].forEach(function (t, i) { var c = ws.getCell(3, i + 1); c.value = t; c.font = { bold: true }; fill(c, i === 3 ? XL.actual[0] : "FFD9E7E4"); });
+      var r = 4;
+      secs.forEach(function (sec) {
+        sec.rows.forEach(function (row) {
+          var col = XL[sec.kind] || XL.extra;
+          ws.getCell(r, 1).value = row.name; ws.getCell(r, 2).value = sec.title;
+          if (row.budget != null) ws.getCell(r, 3).value = Math.round(row.budget * 100) / 100;
+          if (row.actual != null) ws.getCell(r, 4).value = Math.round(row.actual * 100) / 100;
+          ws.getCell(r, 5).value = { formula: "C" + r + "-D" + r, result: Math.round(((row.budget || 0) - (row.actual || 0)) * 100) / 100 };
+          [1, 2, 3, 5].forEach(function (k) { fill(ws.getCell(r, k), col[1]); }); fill(ws.getCell(r, 4), XL.actual[1]);
+          [3, 4, 5].forEach(function (k) { ws.getCell(r, k).numFmt = RAND; });
+          r++;
+        });
+      });
+      maxRow = r; maxCol = 5;
+      var expS = secs.filter(function (x) { return x.kind !== "income"; }), incS = secs.filter(function (x) { return x.kind === "income"; });
+      placed = [{ kind: "income", sumB: incS.reduce(function (a, x) { return a + x.rows.reduce(function (b, y) { return b + (y.budget || 0); }, 0); }, 0), sumA: incS.reduce(function (a, x) { return a + x.rows.reduce(function (b, y) { return b + (y.actual || 0); }, 0); }, 0) },
+        { kind: "exp", sumB: expS.reduce(function (a, x) { return a + x.rows.reduce(function (b, y) { return b + (y.budget || 0); }, 0); }, 0), sumA: expS.reduce(function (a, x) { return a + x.rows.reduce(function (b, y) { return b + (y.actual || 0); }, 0); }, 0) }];
+    } else if (fmt === "mine" && tpl) {
+      var extraRow = 0;
+      secs.forEach(function (sec) { if (sec.r != null) extraRow = Math.max(extraRow, (sec.totalR != null ? sec.totalR : (sec.rows.length ? sec.rows[sec.rows.length - 1].r : sec.r)) + 1); });
+      secs.forEach(function (sec) { placed.push(sec.r != null ? place(sec, sec.r + 1, sec.c + 1) : place(sec, extraRow + 3, 1)); });
+    } else if (fmt === "stacked") {
+      var rr = 3;
+      secs.forEach(function (sec) { var res = place(sec, rr, 1); placed.push(res); rr = maxRow + 2; });
+    } else { // side by side
+      var cc = 1;
+      secs.forEach(function (sec) { placed.push(place(sec, 3, cc)); cc += 4; });
+    }
+
+    // Income vs expenses summary
+    var inc = placed.filter(function (x) { return x.kind === "income"; }), exp = placed.filter(function (x) { return x.kind !== "income"; });
+    var sr = maxRow + 3, sum = function (arr, k) { return arr.reduce(function (a, x) { return a + x[k]; }, 0); };
+    var fx = function (arr, k) { return arr.length && arr[0].budgetCell ? arr.map(function (x) { return x[k]; }).join("+") : null; };
+    [["", "Budgeted", "Actual"], ["Income", sum(inc, "sumB"), sum(inc, "sumA")], ["Expenses", sum(exp, "sumB"), sum(exp, "sumA")]].forEach(function (row, i) {
+      row.forEach(function (v, j) {
+        var c = ws.getCell(sr + i, j + 1);
+        if (i && j) {
+          var f = fx(i === 1 ? inc : exp, j === 1 ? "budgetCell" : "actualCell");
+          c.value = f ? { formula: f, result: Math.round(v * 100) / 100 } : Math.round(v * 100) / 100; c.numFmt = RAND;
+        } else c.value = v;
+        c.font = { bold: !i || !j };
+        if (i === 1 && j) fill(c, XL.income[1]); if (i === 2 && j) fill(c, XL.actual[1]);
+      });
+    });
+    var lc = ws.getCell(sr + 3, 1); lc.value = "Left over"; lc.font = { bold: true };
+    ["B", "C"].forEach(function (L, j) { var c = ws.getCell(sr + 3, j + 2); c.value = { formula: L + (sr + 1) + "-" + L + (sr + 2), result: Math.round(((j ? sum(inc, "sumA") - sum(exp, "sumA") : sum(inc, "sumB") - sum(exp, "sumB"))) * 100) / 100 }; c.numFmt = RAND; c.font = { bold: true }; });
+
+    for (var k = 1; k <= maxCol; k++) {
+      var nameCol = fmt === "table" ? k <= 2 : (fmt === "mine" && tpl ? tpl.sections.some(function (sc) { return sc.c + 1 === k; }) || k === 1 : (k % 4 === 1));
+      ws.getColumn(k).width = nameCol ? 28 : 14;
+    }
+    return ws;
+  }
+
+  function writeSummary(wb, months) {
+    var ws = wb.addWorksheet("Summary");
+    ws.getCell("A1").value = "Budget vs actual · " + months[0].label + " – " + months[months.length - 1].label; ws.getCell("A1").font = { bold: true, size: 14 };
+    ws.getCell("A3").value = "Category"; ws.getCell("A3").font = { bold: true };
+    var data = months.map(function (p) { return stats(p); });
+    months.forEach(function (p, i) {
+      var b = ws.getCell(3, 2 + i * 2), a = ws.getCell(3, 3 + i * 2);
+      var short = p.label.slice(0, 3) + " " + p.label.slice(-4);
+      b.value = short + " budget"; a.value = short + " actual";
+      [b, a].forEach(function (c) { c.font = { bold: true }; }); fill(b, "FFD9E7E4"); fill(a, XL.actual[0]);
+      ws.getColumn(2 + i * 2).width = 18; ws.getColumn(3 + i * 2).width = 18;
+    });
+    var r = 4;
+    var line = function (label, fnB, fnA, bold) {
+      ws.getCell(r, 1).value = label; if (bold) ws.getCell(r, 1).font = { bold: true };
+      months.forEach(function (p, i) {
+        var b = ws.getCell(r, 2 + i * 2), a = ws.getCell(r, 3 + i * 2);
+        var vb = fnB(p, data[i]), va = fnA(p, data[i]);
+        if (vb != null) { b.value = Math.round(vb * 100) / 100; b.numFmt = RAND; }
+        if (va != null) { a.value = Math.round(va * 100) / 100; a.numFmt = RAND; fill(a, XL.actual[1]); }
+        if (bold) { b.font = a.font = { bold: true }; }
+      });
+      r++;
+    };
+    line("Income", function (p) { return incomeFor(p); }, function (p, s) { return s.income; }, true);
+    groups().forEach(function (g) {
+      ws.getCell(r, 1).value = g; ws.getCell(r, 1).font = { bold: true, color: { argb: "FF56605B" } }; r++;
+      cats().filter(function (c) { return (c.group || "Expenses") === g; }).forEach(function (c) {
+        line("  " + c.name, function (p) { return budgetFor(c, p); }, function (p, s) { return s.by[c.id] || 0; });
+      });
+    });
+    if (data.some(function (s) { return s.uncategorised; })) line("Not sorted yet", function () { return null; }, function (p, s) { return s.uncategorised; });
+    line("Total spending", function (p, s) { return s.budget; }, function (p, s) { return s.spent; }, true);
+    line("Left over", function (p, s) { return incomeFor(p) - s.budget; }, function (p, s) { return s.income - s.spent; }, true);
+    ws.getColumn(1).width = 30;
+  }
+
+  function exportSheet() {
+    var tpl = savedTemplate(), months = exportMonths();
+    var st = { fmt: tpl ? "mine" : (local.exportFmt || "side"), from: Math.max(0, months.length - 1), to: months.length - 1, summary: months.length > 1 };
+    var opts = [
+      tpl ? ["mine", "📄 My layout", "Like “" + esc(tpl.sheet || tpl.fname || "your sheet") + "” — same positions as your spreadsheet"] : null,
+      ["side", "▥ Side by side", "Fixed, day-to-day and savings next to each other"],
+      ["stacked", "▤ Stacked", "One column, sections under each other"],
+      ["table", "☰ Simple table", "Category · Group · Budget · Actual · Difference"]
+    ].filter(Boolean);
+    function draw() {
+      var n = st.to - st.from + 1;
+      var html = sheetHead("Export to Excel", "Budget vs actual, one sheet per month") +
+        (tpl ? "" : '<p class="small muted" style="margin-top:0">Import your own budget spreadsheet once and Budgie can export in exactly that layout.</p>') +
+        '<div class="small muted" style="font-weight:600;margin-bottom:6px">Format</div><div class="stack">' + opts.map(function (o) {
+          return '<label class="tour-opt"><input type="radio" name="xfmt" value="' + o[0] + '" ' + (st.fmt === o[0] ? "checked" : "") + '><span><b>' + o[1] + '</b><br><span class="small muted">' + o[2] + '</span></span></label>';
+        }).join("") + '</div>' +
+        '<div class="row" style="margin-top:14px"><label class="field" style="flex:1">From<select id="xFrom">' + months.map(function (p, i) { return '<option value="' + i + '"' + (i === st.from ? " selected" : "") + '>' + esc(p.label) + '</option>'; }).join("") + '</select></label>' +
+        '<label class="field" style="flex:1">To<select id="xTo">' + months.map(function (p, i) { return '<option value="' + i + '"' + (i === st.to ? " selected" : "") + '>' + esc(p.label) + '</option>'; }).join("") + '</select></label></div>' +
+        (n > 1 ? '<label class="check" style="margin-top:12px"><input type="checkbox" id="xSum" ' + (st.summary ? "checked" : "") + '> Add a summary sheet comparing the months</label>' : "") +
+        '<p class="small faint" style="margin:10px 0">' + n + ' sheet' + (n > 1 ? "s" : "") + (n > 1 && st.summary ? " + summary" : "") + ' · opens in Excel, Numbers and Google Sheets.' + (months[st.from].s < (txs().reduce(function (m, t) { return t.date < m ? t.date : m; }, "9999")) ? "" : "") + '</p>' +
+        '<button class="btn primary block sticky-save" id="xGo" type="button">📤 Export ' + n + ' month' + (n > 1 ? "s" : "") + '</button>';
+      openSheet(html, function (el) {
+        el.onchange = function (e) {
+          var t = e.target;
+          if (t.name === "xfmt") { st.fmt = t.value; if (t.value !== "mine") { local.exportFmt = t.value; saveLocal(); } }
+          else if (t.id === "xFrom") { st.from = +t.value; if (st.to < st.from) st.to = st.from; draw(); }
+          else if (t.id === "xTo") { st.to = +t.value; if (st.from > st.to) st.from = st.to; draw(); }
+          else if (t.id === "xSum") st.summary = t.checked;
+        };
+        $("#xGo", el).onclick = function () {
+          var btn = this; btn.disabled = true; btn.textContent = "Building…";
+          var chosen = months.slice(st.from, st.to + 1);
+          buildWorkbook(chosen, st.fmt, tpl, st.summary && chosen.length > 1).then(function (r) {
+            btn.disabled = false; btn.textContent = "📤 Export again";
+            deliverFile(r.blob, r.name);
+          }).catch(function (err) { btn.disabled = false; btn.textContent = "📤 Try again"; toast("Couldn’t build the file: " + err.message); });
+        };
+      });
+    }
+    draw();
+  }
+  function buildWorkbook(months, fmt, tpl, summary) {
+    return loadScript(EXCELJS_URL, "ExcelJS").then(function (EX) {
+      var wb = new EX.Workbook(); wb.creator = "Budgie"; wb.created = new Date();
+      months.forEach(function (p) { writeMonth(wb, p, fmt, tpl); });
+      if (summary) writeSummary(wb, months);
+      return wb.xlsx.writeBuffer();
+    }).then(function (buf) {
+      var name = "Budgie " + (months.length > 1 ? months[0].label + " – " + months[months.length - 1].label : months[0].label) + ".xlsx";
+      return { blob: new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), name: name };
+    });
+  }
+  // Phones: share sheet (Save to Files, email, WhatsApp). Laptops: download.
+  function deliverFile(blob, name) {
+    var file = typeof File === "function" ? new File([blob], name, { type: blob.type }) : null;
+    var mobile = /iPhone|iPad|Android/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    if (mobile && file && navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], title: name }).catch(function (e) { if (e && e.name !== "AbortError") downloadFile(name, blob, blob.type); });
+    } else { downloadFile(name, blob, blob.type); toast("Saved " + name); }
+  }
+
+  // ======================================================================
   // Spreadsheet import
   // ======================================================================
   function loadSheetJS() {
@@ -1844,7 +2130,7 @@
         }
         if (!items || items.length < 2 || numeric < 2) continue;
         items.forEach(function (it) { used[it.r + ":" + c] = 1; });
-        blocks.push({ header: cleanName(h), kind: blockKind(h), items: items });
+        blocks.push({ header: cleanName(h), kind: blockKind(h), items: items, r: r, c: c });
       }
     }
     return blocks;
@@ -1873,6 +2159,7 @@
     var blocks = detectBlocks(rows || []);
     if (blocks.filter(function (b) { return b.kind !== "skip"; }).length >= 2) {
       var multi = detectFromBlocks(blocks);
+      multi.template = templateFromBlocks(rows || [], blocks);
       if (multi.items.length) return multi;
     }
     rows = (rows || []).map(function (r) { return (r || []).map(function (c) { return c == null ? "" : c; }); }).filter(function (r) { return r.some(function (c) { return String(c).trim() !== ""; }); });
@@ -1984,13 +2271,17 @@
         };
         $("#impGo", el).onclick = function () {
           local.onboarded = true; saveLocal();
+          var tplNow = det.template ? JSON.parse(JSON.stringify(det.template)) : null;
+          if (tplNow) { tplNow.sheet = sheets && sheets[sheetIdx] ? sheets[sheetIdx].name : ""; tplNow.fname = fname; }
           if (when === "next") {
+            if (tplNow) saveTemplate(tplNow);
             scheduleBudget(JSON.parse(JSON.stringify(det.items)), JSON.parse(JSON.stringify(det.incomeItems)), mode, fname);
             closeSheet(); ui.tab = "home"; commit();
             toast("📄 Saved — it switches on when your next salary arrives");
             return;
           }
           var r = applyBudget(det.items, det.incomeItems, mode);
+          if (tplNow) saveTemplate(tplNow);
           closeSheet(); ui.tab = "home"; commit(); toast("Imported " + r.count + " categories" + (r.income ? " · income " + money(r.income) : "") + " ✓");
         };
       });
@@ -2096,7 +2387,7 @@
   function mergeDocs(a, b) {
     var out = blankDb();
     out.settings = (b.settings && (b.settings.updatedAt || 0) > (a.settings.updatedAt || 0)) ? b.settings : a.settings;
-    ["categories", "transactions", "rules", "unread", "paydays", "pending", "history"].forEach(function (k) {
+    ["categories", "transactions", "rules", "unread", "paydays", "pending", "history", "templates"].forEach(function (k) {
       var map = {};
       (a[k] || []).concat(b[k] || []).forEach(function (r) { var ex = map[r.id]; if (!ex || (r.updatedAt || 0) > (ex.updatedAt || 0)) map[r.id] = r; });
       out[k] = Object.keys(map).map(function (id) { return map[id]; });
@@ -2344,6 +2635,7 @@
       case "pick-file": ui.importForNext = false; $("#fileInput").click(); break;
       case "pick-statement": ui.importForNext = false; $("#fileInput").click(); break;
       case "plan": planSheet(); break;
+      case "export-xlsx": if (!cats().length) { toast("Set up your budget first"); break; } exportSheet(); break;
       case "tour": openTour(0); break;
       case "recap": var rp0 = recapPeriod(); if (rp0) openRecap(rp0); else toast("Your first recap appears once you’ve tracked a full month"); break;
       case "template": downloadFile("budgie-budget-template.csv", templateCsv(), "text/csv"); break;
@@ -2467,5 +2759,5 @@
   syncNow();
 
   // exposed for testing in the console
-  window.Budgie = { openTour: openTour, recapSlidesEasy: recapSlidesEasy, keepUnread: keepUnread, tidyUnread: tidyUnread, unreadList: unreadList, recapData: recapData, suggestionsFor: suggestionsFor, parseStatementLines: parseStatementLines, statementFromRows: statementFromRows, statementCandidates: statementCandidates, openRecap: openRecap, planSheet: planSheet, statementSheet: statementSheet, period: period, ingestSms: ingestSms, handleFile: handleFile, parseSms: parseSms, detectBudget: detectBudget, categorise: categorise, merchantKey: merchantKey, get db() { return db; } };
+  window.Budgie = { buildWorkbook: buildWorkbook, monthSections: monthSections, savedTemplate: savedTemplate, exportMonths: exportMonths, openTour: openTour, recapSlidesEasy: recapSlidesEasy, keepUnread: keepUnread, tidyUnread: tidyUnread, unreadList: unreadList, recapData: recapData, suggestionsFor: suggestionsFor, parseStatementLines: parseStatementLines, statementFromRows: statementFromRows, statementCandidates: statementCandidates, openRecap: openRecap, planSheet: planSheet, statementSheet: statementSheet, period: period, ingestSms: ingestSms, handleFile: handleFile, parseSms: parseSms, detectBudget: detectBudget, categorise: categorise, merchantKey: merchantKey, get db() { return db; } };
 })();
