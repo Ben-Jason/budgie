@@ -364,6 +364,13 @@
     var re = KW_CACHE[k] || (KW_CACHE[k] = new RegExp("(^|[^a-z])" + k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + (k.length <= 4 ? "([^a-z]|$)" : "")));
     return re.test(text);
   }
+  // shop keywords match whole words, allowing plurals/possessives ("nando" → "Nando's"; "water" ≠ "Waterfront")
+  var KWM_CACHE = {};
+  function kwInM(text, m) {
+    var k = m.trim(); if (!k) return false;
+    var re = KWM_CACHE[k] || (KWM_CACHE[k] = new RegExp("(^|[^a-z])" + k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(s|'s|’s)?([^a-z]|$)"));
+    return re.test(text);
+  }
   function guessKind(name) {
     var n = " " + String(name || "").toLowerCase() + " ";
     var best = null, bestLen = 0, bestPos = -1;
@@ -374,7 +381,7 @@
     if (best) return best;
     // category named after a company ("Netflix", "King Price", "Telkom")
     Object.keys(KINDS).forEach(function (k) {
-      KINDS[k].m.forEach(function (m) { var mm = m.trim(); if (mm.length >= 3 && mm.length > bestLen && kwIn(n, mm)) { best = k; bestLen = mm.length; } });
+      KINDS[k].m.forEach(function (m) { var mm = m.trim(); if (mm.length >= 3 && mm.length > bestLen && kwInM(n, mm)) { best = k; bestLen = mm.length; } });
     });
     return best;
   }
@@ -388,6 +395,110 @@
     return w.slice(0, 2).join(" ");
   }
 
+  // ======================================================================
+  // Learning from the user: a single-layer neural network (softmax
+  // regression) over hashed features of each payment, trained on-device
+  // from the categories the user picked or corrected. Retrained lazily when
+  // transactions change — it's small (a few ms per hundred payments), so
+  // nothing is stored or synced except the transactions themselves.
+  // ======================================================================
+  var ML_DIM = 4096, ML_EPOCHS = 14;
+  var ML_T = { p: 0.6, margin: 0.25, seen: 2, guardP: 0.5, guardSeen: 3 };   // chosen by replaying a year of real payments
+  var ml = { dirty: true, model: null };
+  var ML_STOP = /^(pos|purchase|pur|card|no|cheq|cheque|acc|account|avail|available|bal|balance|from|to|at|on|the|and|en|of|for|ref|payment|paid|debit|credit|overseas|effec|digital|absa|bank|fnb|capitec|std|nedbank|discovery|za|zaf|cape|town|pty|ltd|online|apple|pay)$/;
+  function mlHash(s) { var h = 2166136261; for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0) % ML_DIM; }
+  function mlWords(s) { return String(s || "").toLowerCase().replace(/[^a-z& ]+/g, " ").split(/\s+/).filter(function (w) { return w.length >= 2 && !ML_STOP.test(w); }); }
+  function mlFeatures(tx) {
+    var f = {}, add = function (k, w) { var i = mlHash(k); f[i] = (f[i] || 0) + (w || 1); };
+    var mw = mlWords(tx.merchant);
+    mw.forEach(function (w, i) { add("w:" + w); if (i) add("b:" + mw[i - 1] + "_" + w); });
+    if (mw[0]) add("f:" + mw[0], 1.5);
+    var compact = mw.slice(0, 3).join("");
+    for (var i = 0; i + 3 <= compact.length; i++) add("c:" + compact.substr(i, 3), 0.35);   // survives typos and branch names
+    mlWords(tx.raw).slice(0, 14).forEach(function (w) { if (mw.indexOf(w) < 0) add("r:" + w, 0.5); });
+    var merch = (" " + (tx.merchant || "") + " ").toLowerCase();
+    Object.keys(KINDS).forEach(function (k) { if (KINDS[k].m.some(function (m) { return kwInM(merch, m); })) add("k:" + k, 1.2); });  // built-in shop knowledge as a hint
+    if (tx.amount) add("a:" + Math.round(Math.log(tx.amount + 1) / Math.LN2), 0.6);
+    if (tx.date) add("d:" + fromIso(tx.date).getDay(), 0.2);
+    add("s:" + (tx.source || "manual"), 0.2);
+    add("bias", 0.3);
+    var keys = Object.keys(f), norm = 0;
+    keys.forEach(function (k) { norm += f[k] * f[k]; }); norm = Math.sqrt(norm) || 1;
+    return keys.map(function (k) { return [+k, f[k] / norm]; });
+  }
+  // How much each known label counts: your corrections most, the app's unconfirmed guesses barely.
+  function mlWeight(t) { return t.corrected ? 3 : t.userCat ? 2 : t.ruleCat ? 1 : t.auto ? 0.3 : 1; }
+  function mlTrain() {
+    var ex = txs().filter(function (t) { return t.type !== "income" && t.catId && !t.needsReview && (t.catId === TRANSFER || cat(t.catId)); });
+    var classes = []; ex.forEach(function (t) { if (classes.indexOf(t.catId) < 0) classes.push(t.catId); });
+    var model = { classes: classes, W: new Float32Array(Math.max(1, classes.length) * ML_DIM), confirmed: {}, n: 0 };
+    ml.model = model; ml.dirty = false;
+    if (classes.length < 2) return model;
+    var data = ex.map(function (t) { var w = mlWeight(t); if (w >= 1) { model.confirmed[t.catId] = (model.confirmed[t.catId] || 0) + 1; model.n++; } return { x: mlFeatures(t), y: classes.indexOf(t.catId), w: w }; });
+    var C = classes.length, W = model.W, scores = new Float32Array(C), lr = 0.8, lambda = 1e-4, seed = 42;
+    var rnd = function () { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };  // seeded → same model on every device
+    for (var ep = 0; ep < ML_EPOCHS; ep++) {
+      for (var q = data.length - 1; q > 0; q--) { var r = Math.floor(rnd() * (q + 1)), tmp = data[q]; data[q] = data[r]; data[r] = tmp; }
+      for (var k = 0; k < data.length; k++) {
+        var d = data[k], x = d.x, max = -1e9, sum = 0, c, j;
+        for (c = 0; c < C; c++) { var s = 0; for (j = 0; j < x.length; j++) s += W[c * ML_DIM + x[j][0]] * x[j][1]; scores[c] = s; if (s > max) max = s; }
+        for (c = 0; c < C; c++) { scores[c] = Math.exp(scores[c] - max); sum += scores[c]; }
+        for (c = 0; c < C; c++) {
+          var g = (scores[c] / sum - (c === d.y ? 1 : 0)) * d.w * lr;
+          if (Math.abs(g) < 1e-6) continue;
+          for (j = 0; j < x.length; j++) { var idx = c * ML_DIM + x[j][0]; W[idx] -= g * x[j][1] + lambda * W[idx]; }
+        }
+      }
+      lr *= 0.85;
+    }
+    return model;
+  }
+  function mlPredict(tx) {
+    if (window.__budgieNoML) return [];   // test switch: compare with/without learning
+    var model = ml.dirty || !ml.model ? mlTrain() : ml.model;
+    if (model.classes.length < 2 || model.n < 6) return [];
+    var x = mlFeatures(tx), C = model.classes.length, out = [], max = -1e9, sum = 0;
+    for (var c = 0; c < C; c++) { var s = 0; for (var j = 0; j < x.length; j++) s += model.W[c * ML_DIM + x[j][0]] * x[j][1]; out.push(s); if (s > max) max = s; }
+    out = out.map(function (s, i) { var e = Math.exp(s - max); sum += e; return { catId: model.classes[i], e: e }; });
+    return out.map(function (o) { return { catId: o.catId, p: o.e / sum, seen: model.confirmed[o.catId] || 0 }; })
+      .filter(function (o) { return o.catId === TRANSFER || cat(o.catId); }).sort(function (a, b) { return b.p - a.p; });
+  }
+  function mlStats() {
+    var since = iso(addDays(today(), -60)), auto = 0, wrong = 0;
+    txs().forEach(function (t) { if (t.date < since || t.type === "income") return; if (t.auto || t.corrected) auto++; if (t.corrected) wrong++; });
+    var m = ml.dirty || !ml.model ? mlTrain() : ml.model;
+    return { learned: m.n, auto: auto, wrong: wrong, accuracy: auto ? Math.round((auto - wrong) / auto * 100) : null };
+  }
+
+  // Which built-in shop types a payment matches, keeping only the most specific ("uber eats" beats "uber")
+  function detectKinds(merch, hay) {
+    var kinds = [];
+    Object.keys(KINDS).forEach(function (k) { if (KINDS[k].m.some(function (m) { return kwInM(merch, m); })) kinds.push(k); });
+    if (!kinds.length) Object.keys(KINDS).forEach(function (k) { if (KINDS[k].m.some(function (m) { return m.trim().length > 3 && kwInM(hay, m); })) kinds.push(k); });
+    var bestM = {};
+    kinds.forEach(function (k) { KINDS[k].m.forEach(function (m) { var t = m.trim(); if (kwInM(hay, t) && (!bestM[k] || t.length > bestM[k].length)) bestM[k] = t; }); });
+    kinds = kinds.filter(function (k) { return !kinds.some(function (o) { return o !== k && bestM[o] && bestM[k] && bestM[o].length > bestM[k].length && bestM[o].indexOf(bestM[k]) > -1; }); });
+    return { kinds: kinds, bestM: bestM };
+  }
+  // Your habit per shop type, from what you sorted: "supermarkets → Groceries (9 of 9)"
+  var kindPrefCache = null;
+  function kindPrefs() {
+    if (kindPrefCache && !ml.dirty && kindPrefCache.n === db.transactions.length) return kindPrefCache.prefs;
+    var tally = {};
+    txs().forEach(function (t) {
+      if (t.type !== "expense" || !t.catId || t.needsReview || !(t.userCat || t.corrected || t.ruleCat)) return;
+      var merch = (" " + (t.merchant || "") + " ").toLowerCase();
+      detectKinds(merch, (merch + " " + (t.raw || "")).toLowerCase()).kinds.forEach(function (k) { tally[k] = tally[k] || {}; tally[k][t.catId] = (tally[k][t.catId] || 0) + 1; });
+    });
+    var prefs = {};
+    Object.keys(tally).forEach(function (k) {
+      var ids = Object.keys(tally[k]), total = ids.reduce(function (a, id) { return a + tally[k][id]; }, 0);
+      ids.sort(function (a, b) { return tally[k][b] - tally[k][a]; });
+      prefs[k] = { catId: ids[0], n: tally[k][ids[0]], share: tally[k][ids[0]] / total };
+    });
+    kindPrefCache = { n: db.transactions.length, prefs: prefs };
+    return prefs;
+  }
   function categorise(tx) {
     var res = { catId: null, confidence: 0, suggest: [], reason: "" };
     if (tx.type === "income") return { catId: null, confidence: 1, suggest: [], reason: "income" };
@@ -397,7 +508,7 @@
     if (key) {
       var rule = db.rules.filter(function (r) { return r.id === key && !r.deleted; })[0];
       if (rule && (rule.catId === TRANSFER || cat(rule.catId))) {
-        return { catId: rule.catId, confidence: 1, suggest: [rule.catId], reason: "You chose this before for “" + key + "”" };
+        return { catId: rule.catId, confidence: 1, suggest: [rule.catId], reason: "You chose this before for “" + key + "”", rule: true };
       }
     }
     // same brand, different branch ("makro woodmead" vs "makro strubens") → strong suggestion only
@@ -411,27 +522,40 @@
         .some(function (k) { return k.length > 1 && hay.indexOf(k) > -1; });
     });
     if (kwHits.length === 1) return { catId: kwHits[0].id, confidence: 0.92, suggest: [kwHits[0].id], reason: "Matches your keyword" };
+    // 2b. what the model learned from your own sorting
+    var pred = mlPredict(tx), top = pred[0], second = pred[1];
+    var catLabel = function (id) { return id === TRANSFER ? "transfers" : (cat(id) || {}).name; };
+    var T = window.__mlT || ML_T;
+    var mlSure = top && top.p >= T.p && top.seen >= T.seen && (!second || top.p - second.p >= T.margin);
+    var mlResult = mlSure && { catId: top.catId, confidence: 0.86, suggest: pred.slice(0, 3).map(function (x) { return x.catId; }), reason: "Learned from " + top.seen + " payment" + (top.seen > 1 ? "s" : "") + " you sorted into " + catLabel(top.catId), ml: true };
+    // built-in guesses yield when your own history clearly says otherwise
+    var guard = function (r) {
+      var gp = r.strong ? 0.9 : T.guardP, gs = r.strong ? 5 : T.guardSeen;
+      if (top && top.seen >= gs && top.p >= gp && top.catId !== r.catId)
+        return { catId: null, confidence: 0.5, suggest: [top.catId, r.catId].concat(pred.slice(1, 3).map(function (x) { return x.catId; })).filter(function (v, i, a) { return v && a.indexOf(v) === i; }).slice(0, 4),
+          reason: "Your past sorting says " + catLabel(top.catId) + ", the shop name says " + catLabel(r.catId) };
+      return r;
+    };
+    var dk = tx.merchant ? detectKinds(merch, hay) : { kinds: [], bestM: {} }, kindsFound = dk.kinds;
+    var specificElsewhere = function (c) {
+      var n = cleanName(c.name).toLowerCase(), ck = guessKind(c.name + " " + (c.group || "")) || c.kind;
+      return Object.keys(dk.bestM).some(function (k) { return k !== ck && kindsFound.indexOf(k) > -1 && dk.bestM[k].length > n.length && dk.bestM[k].indexOf(n) > -1; });
+    };
     // a category called "Netflix" or "King Price" catches that merchant
     var mCompact = merch.replace(/[^a-z]/g, ""), mFirst = (merch.trim().split(/\s+/)[0] || "").replace(/[^a-z]/g, "");
     // an exact category name in the description beats looser matches ("Google One" vs "Google 24com")
-    var exactHits = all.filter(function (c) { var n = cleanName(c.name).toLowerCase(); return n.length >= 3 && new RegExp("(^|[^a-z])" + n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "([^a-z]|$)").test(merch); });
-    if (exactHits.length === 1) return { catId: exactHits[0].id, confidence: 0.9, suggest: [exactHits[0].id], reason: "Matches your “" + exactHits[0].name + "” category" };
+    var exactHits = all.filter(function (c) { var n = cleanName(c.name).toLowerCase(); return n.length >= 3 && !specificElsewhere(c) && new RegExp("(^|[^a-z])" + n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "([^a-z]|$)").test(merch); });
+    if (exactHits.length === 1) return guard({ strong: true, catId: exactHits[0].id, confidence: 0.9, suggest: [exactHits[0].id], reason: "Matches your “" + exactHits[0].name + "” category" });
     var nameHits = all.filter(function (c) {
-      var n = cleanName(c.name).toLowerCase(); if (n.length < 3) return false;
+      var n = cleanName(c.name).toLowerCase(); if (n.length < 3 || specificElsewhere(c)) return false;
       if (new RegExp("(^|[^a-z])" + n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "([^a-z]|$)").test(merch)) return true;
       var nc = n.replace(/[^a-z]/g, "");
       if (nc.length >= 6 && mCompact.indexOf(nc) > -1) return true;                      // "kingprice" ~ "King Price"
       return mFirst.length >= 4 && nc.length >= 6 && nc.indexOf(mFirst) === 0 && !isFinite(mFirst); // "disc" ~ "Discovery"
     });
-    if (nameHits.length === 1) return { catId: nameHits[0].id, confidence: 0.9, suggest: [nameHits[0].id], reason: "Matches your “" + nameHits[0].name + "” category" };
+    if (nameHits.length === 1) return guard({ strong: true, catId: nameHits[0].id, confidence: 0.9, suggest: [nameHits[0].id], reason: "Matches your “" + nameHits[0].name + "” category" });
     // 3. built-in merchant knowledge, mapped onto your category names
-    var kinds = [];
-    Object.keys(KINDS).forEach(function (k) {
-      if (KINDS[k].m.some(function (m) { return kwIn(merch, m); })) kinds.push(k);
-    });
-    if (!kinds.length && tx.merchant) {
-      Object.keys(KINDS).forEach(function (k) { if (KINDS[k].m.some(function (m) { return m.trim().length > 3 && kwIn(hay, m); })) kinds.push(k); });
-    }
+    var kinds = kindsFound;
     var kindOf = function (c) { return guessKind(c.name + " " + (c.group || "")) || c.kind; };
     var subs = kinds.filter(function (k) { return KINDS[k].parent; });
     // a specific sub-kind (coffee, parking, uber) beats its parent when you have that category
@@ -448,21 +572,30 @@
       if (named.length === 1) cands = named;
     }
     kwHits.forEach(function (c) { if (cands.indexOf(c.id) < 0) cands.unshift(c.id); });
-    if (cands.length === 1) return { catId: cands[0], confidence: 0.82, suggest: cands, reason: "Looks like " + kinds[0] };
+    if (cands.length > 1 && kinds.length === 1) {
+      var pref = kindPrefs()[kinds[0]];
+      if (pref && pref.n >= 3 && pref.share >= 0.75 && cands.indexOf(pref.catId) > -1)
+        return guard({ catId: pref.catId, confidence: 0.84, suggest: cands, reason: "You usually put " + kinds[0] + " in " + catLabel(pref.catId) + " (" + pref.n + " times)" });
+    }
+    if (cands.length === 1) return guard({ catId: cands[0], confidence: 0.82, suggest: cands, reason: "Looks like " + kinds[0] });
+    // nothing specific matched (or several fit): the model learned from your sorting decides
+    if (mlResult) return mlResult;
     // Uncertain: suggest the candidates, then your most-used categories
     var freq = {};
     txs().forEach(function (t) { if (t.catId) freq[t.catId] = (freq[t.catId] || 0) + 1; });
     var popular = all.map(function (c) { return c.id; }).sort(function (a, b) { return (freq[b] || 0) - (freq[a] || 0); });
     if (near) cands = [near.catId].concat(cands.filter(function (id) { return id !== near.catId; }));
+    var mlTop = pred.filter(function (x) { return x.p >= 0.12 && x.catId !== TRANSFER; }).slice(0, 2).map(function (x) { return x.catId; });
+    cands = mlTop.concat(cands.filter(function (id) { return mlTop.indexOf(id) < 0; }));
     res.suggest = cands.concat(popular.filter(function (id) { return cands.indexOf(id) < 0; })).slice(0, 4);
     res.confidence = cands.length ? 0.5 : 0.1;
-    res.reason = near ? "You put “" + titleCase(near.id) + "” in " + cat(near.catId).name : cands.length ? "Could be a few categories" : "New merchant";
+    res.reason = near ? "You put “" + titleCase(near.id) + "” in " + cat(near.catId).name : mlTop.length ? "Best guess from your past sorting" : cands.length ? "Could be a few categories" : "New merchant";
     return res;
   }
   function applyCategory(tx) {
     var r = categorise(tx);
     if (tx.type === "income") { tx.catId = null; tx.needsReview = false; return; }
-    if (r.confidence >= 0.8) { tx.catId = r.catId; tx.needsReview = false; if (r.catId === TRANSFER) tx.type = "transfer"; }
+    if (r.confidence >= 0.8) { tx.catId = r.catId; tx.needsReview = false; if (r.catId === TRANSFER) tx.type = "transfer"; if (r.rule) tx.ruleCat = true; else tx.auto = true; }
     else { tx.catId = null; tx.needsReview = true; tx.suggest = r.suggest; }
     tx.why = r.reason;
   }
@@ -644,6 +777,30 @@
       '</span></button>';
   }
 
+  // One line per section (Fixed, Day-to-day, Savings, ...) for the Home summary and the collapsible cards.
+  function groupInfo(s, p) {
+    return groups().map(function (g) {
+      var list = cats().filter(function (c) { return (c.group || "Expenses") === g; });
+      var spent = 0, budget = 0, nFixed = 0, paid = 0, over = 0;
+      list.forEach(function (c) {
+        var sp = s.by[c.id] || 0, b = budgetFor(c, p), fx = isFixed(c);
+        spent += sp; budget += b;
+        if (fx) { nFixed++; if (b && sp >= b - 0.5) paid++; }
+        if (b ? sp > b * 1.0001 : sp > 0) over++;
+      });
+      var fixed = nFixed > list.length / 2;
+      var st = paceStatus(spent, budget, p, fixed);
+      var note = fixed ? paid + " of " + nFixed + " paid" : STATUS_LABEL[st];
+      if (over) note += " · " + over + " over";
+      return { name: g, list: list, spent: spent, budget: budget, fixed: fixed, st: st, note: note, pct: budget ? clamp(spent / budget * 100, 0, 100) : (spent ? 100 : 0) };
+    }).filter(function (gi) { return gi.list.length; });
+  }
+  // Fixed sections start folded so day-to-day spending sits higher up; the choice is remembered per device.
+  function groupCollapsed(gi) {
+    var c = (local.collapsed || {})[gi.name];
+    return c === true || c === false ? c : gi.fixed;
+  }
+
   function renderHome(p) {
     if (!cats().length) return onboardingHtml();
     var s = stats(p);
@@ -694,6 +851,15 @@
       h += '<div class="pace-note">' + (left >= 0 ? "🎉 You finished this month " + money(left) + " under budget." : "This month ended " + money(-left) + " over budget.") + '</div>';
     }
     h += '</div>';
+    var gInfo = groupInfo(s, p);
+    if (gInfo.length > 1) {
+      h += '<div class="card group-sum"><div class="card-h"><h3>By section</h3><span class="small faint">Tap to open</span></div>' + gInfo.map(function (gi) {
+        return '<button class="gsum" data-act="group-open" data-g="' + esc(gi.name) + '" type="button"><span class="top"><span class="name">' + esc(gi.name) + '</span><span class="amt num"><b>' + money(gi.spent) + '</b> <span class="faint">/ ' + money(gi.budget) + '</span></span></span>' +
+          '<span class="bar ' + gi.st + '" role="progressbar" aria-valuenow="' + Math.round(gi.pct) + '" aria-valuemin="0" aria-valuemax="100" aria-label="' + esc(gi.name) + '"><span class="fill" style="width:' + gi.pct + '%"></span>' +
+          (p.current && !gi.fixed ? '<span class="pace" style="left:calc(' + (p.elapsed / p.days * 100) + '% - 1px)"></span>' : "") + '</span>' +
+          '<span class="meta"><span>' + gi.note + '</span><span class="num">' + (gi.budget - gi.spent >= 0 ? money(gi.budget - gi.spent) + " left" : money(gi.spent - gi.budget) + " over") + '</span></span></button>';
+      }).join("") + '</div>';
+    }
     var un = unreadList();
     if (un.length) {
       h += '<button class="review-banner" data-act="unread" type="button"><span class="emoji">📩</span><span class="spacer"><b>' + un.length + ' bank message' + (un.length > 1 ? "s" : "") + ' to check</b><span class="small">Looks like a payment, but I couldn’t pick out the amount — tap to add or dismiss</span></span>' + ICON.chev + '</button>';
@@ -707,12 +873,12 @@
     h += recent.length ? recent.map(txRow).join("") : '<p class="small faint" style="margin:0">No transactions yet this month. Tap + to add one, or set up SMS forwarding in Settings.</p>';
     h += '</div></div><div>';
     // categories grouped
-    var gs = groups();
-    gs.forEach(function (g) {
-      var list = cats().filter(function (c) { return (c.group || "Expenses") === g; });
-      var gSpent = list.reduce(function (a, c) { return a + (s.by[c.id] || 0); }, 0), gBud = list.reduce(function (a, c) { return a + budgetFor(c, p); }, 0);
-      h += '<div class="card"><div class="card-h"><h3>' + esc(g) + '</h3><span class="small faint num">' + money(gSpent) + ' / ' + money(gBud) + '</span></div>';
-      h += list.map(function (c) { return catRow(c, s.by[c.id] || 0, p); }).join("");
+    gInfo.forEach(function (gi) {
+      var shut = groupCollapsed(gi);
+      h += '<div class="card group-card' + (shut ? ' shut' : '') + '" data-group="' + esc(gi.name) + '"><button class="card-h group-toggle" data-act="group-toggle" data-g="' + esc(gi.name) + '" type="button" aria-expanded="' + !shut + '">' +
+        '<h3>' + esc(gi.name) + '</h3><span class="spacer"></span><span class="small faint num">' + money(gi.spent) + ' / ' + money(gi.budget) + '</span><span class="chev">' + ICON.chev + '</span></button>';
+      if (shut) h += '<div class="small faint group-note">' + gi.note + ' · tap to see all ' + gi.list.length + '</div>';
+      else h += gi.list.map(function (c) { return catRow(c, s.by[c.id] || 0, p); }).join("");
       h += '</div>';
     });
     if (s.uncategorised) h += '<div class="card"><button class="cat" data-act="review" type="button"><span class="emoji">❔</span><span class="body"><span class="top"><span class="name">Not sorted yet</span><span class="amt num"><b>' + money(s.uncategorised) + '</b></span></span><span class="meta"><span>Counts toward your total — tap to sort</span></span></span></button></div>';
@@ -997,7 +1163,8 @@
     h += '<div class="card"><div class="card-h"><h3>Your data</h3></div><div class="row wrap">' +
       '<button class="btn sm" data-act="export" type="button">⬇️ Download backup</button><button class="btn sm" data-act="import-backup" type="button">⬆️ Restore backup</button>' +
       '<button class="btn sm" data-act="export-csv" type="button">Transactions as CSV</button><button class="btn sm" data-act="export-xlsx" type="button">📤 Budget vs actual (Excel)</button></div>' +
-      '<p class="small faint">Learned merchant rules: ' + db.rules.filter(function (r) { return !r.deleted; }).length + ' · Transactions: ' + txs().length + '</p>' +
+      (function () { var st = mlStats(); return '<p class="small faint">🧠 Auto-sorting has learned from ' + st.learned + ' of your choices' + (st.accuracy != null ? ' · ' + st.accuracy + '% of its sorting in the last 60 days needed no fixing (' + st.wrong + ' corrected)' : '') + '</p>'; })() +
+      '<p class="small faint">Remembered shops: ' + db.rules.filter(function (r) { return !r.deleted; }).length + ' · Transactions: ' + txs().length + '</p>' +
       '<button class="btn sm danger" data-act="wipe" type="button">Erase everything on this device</button></div>';
     h += '<p class="small faint" style="text-align:center">Budgie · made for you · v1.0</p>';
     h += '</div></div>';
@@ -1037,7 +1204,7 @@
       '<div class="row"><label class="field" style="flex:1">Date<input type="date" id="txDate" value="' + t.date + '"></label><label class="field" style="flex:1.4">Note<input id="txNote" value="' + esc(t.note || "") + '" placeholder="Optional"></label></div>' +
       (t.raw ? '<div class="raw">' + esc(t.raw) + '</div>' : "") +
       '<label class="check" id="salaryWrap"><input type="checkbox" id="txSalary" ' + (t.salary ? "checked" : "") + '> <span><b>This is my salary</b> — start a new budget month on this date</span></label>' +
-      '<label class="check" id="rememberWrap"><input type="checkbox" id="txRemember" ' + (t.source === "sms" ? "checked" : "") + '> Always use this category for this merchant</label>' +
+      '<label class="check" id="rememberWrap"><input type="checkbox" id="txRemember" ' + (!isNew || t.source === "sms" || t.source === "statement" ? "checked" : "") + '> Always use this category for this merchant</label>' +
       '<button class="btn primary block sticky-save" id="txSave" type="button">' + (isNew ? "Add" : "Save") + '</button>' +
       (isNew ? "" : '<button class="btn danger block" id="txDelete" type="button">Delete</button>') + '</div>';
     openSheet(html, function (el) {
@@ -1062,13 +1229,21 @@
         var amt = Math.abs(parseAmount($("#txAmount", el).value));
         if (!amt) { toast("Enter an amount"); $("#txAmount", el).focus(); return; }
         var existing = db.transactions.filter(function (x) { return x.id === t.id; })[0];
-        var rec = existing || t;
+        var rec = existing || t, prevCat = existing ? existing.catId : null, fixOthers = [];
         rec.amount = Math.round(amt * 100) / 100; rec.type = state.type;
         rec.merchant = $("#txMerchant", el).value.trim() || (state.type === "income" ? "Income" : "Transaction");
         rec.date = $("#txDate", el).value || iso(today()); rec.note = $("#txNote", el).value.trim();
         if (state.type === "expense") {
           rec.catId = state.catId;
           if (!rec.catId && isNew) { applyCategory(rec); } else rec.needsReview = !rec.catId;
+          if (state.catId && rec.catId !== prevCat) {
+            if (existing && prevCat && (rec.auto || rec.ruleCat)) rec.corrected = true;   // the app had it wrong
+            rec.userCat = true; rec.auto = false; rec.ruleCat = false; ml.dirty = true;
+            if (existing && prevCat) {
+              var k = merchantKey(rec.merchant);
+              fixOthers = txs().filter(function (x) { return x !== rec && x.catId === prevCat && !x.userCat && merchantKey(x.merchant) === k; });
+            }
+          }
           if (rec.catId && $("#txRemember", el).checked) learn(rec.merchant, rec.catId);
         } else { rec.catId = state.type === "transfer" ? TRANSFER : null; rec.needsReview = false; }
         delete rec.suggest; touch(rec);
@@ -1082,6 +1257,14 @@
         }
         closeSheet(); commit();
         if (started) { announceNewMonth(rec); return; }
+        if (fixOthers.length && cat(rec.catId)) {
+          var target = rec.catId;
+          toast("Saved · move " + fixOthers.length + " other “" + rec.merchant + "” payment" + (fixOthers.length > 1 ? "s" : "") + " to " + cat(target).name + " too?", "Move", function () {
+            fixOthers.forEach(function (x) { x.catId = target; x.corrected = true; x.userCat = true; x.auto = false; touch(x); });
+            ml.dirty = true; commit(); toast("Moved " + fixOthers.length + " ✓");
+          });
+          return;
+        }
         toast(isNew ? "Added " + money(rec.amount, true) + (rec.catId && cat(rec.catId) ? " to " + cat(rec.catId).name : "") : "Saved");
       };
       if (!isNew) $("#txDelete", el).onclick = function () {
@@ -1098,7 +1281,8 @@
     if (r) { r.catId = catId; r.deleted = false; touch(r); } else db.rules.push(touch({ id: key, catId: catId, label: merchant }));
     // sort other waiting transactions from the same merchant
     var n = 0;
-    txs().forEach(function (t) { if (t.needsReview && merchantKey(t.merchant) === key) { t.catId = catId; t.needsReview = false; if (catId === TRANSFER) t.type = "transfer"; delete t.suggest; touch(t); n++; } });
+    txs().forEach(function (t) { if (t.needsReview && merchantKey(t.merchant) === key) { t.catId = catId; t.needsReview = false; t.ruleCat = true; if (catId === TRANSFER) t.type = "transfer"; delete t.suggest; touch(t); n++; } });
+    ml.dirty = true;
     return n;
   }
 
@@ -1128,7 +1312,7 @@
       function resolve(catId) {
         el.onclick = null;
         var remember = $("#rvRemember", el).checked;
-        t.catId = catId; t.needsReview = false; delete t.suggest; if (catId === TRANSFER) t.type = "transfer"; touch(t);
+        t.catId = catId; t.needsReview = false; t.userCat = true; t.auto = false; delete t.suggest; if (catId === TRANSFER) t.type = "transfer"; touch(t); ml.dirty = true;
         var more = remember ? learn(t.merchant, catId) : 0;
         persist(); scheduleSync(); render();
         if (more) toast("Also sorted " + more + " more from " + t.merchant);
@@ -1344,7 +1528,7 @@
     markDuplicates(cands);
     cands.forEach(function (c) {
       if (c.type !== "expense" || c.fee) return;
-      var g = { merchant: c.merchant, raw: c.raw, type: "expense" }; applyCategory(g); c.catId = g.catId; c.needsReview = g.needsReview; c.suggest = g.suggest;
+      var g = { merchant: c.merchant, raw: c.raw, type: "expense", amount: c.amount, date: c.date, source: "statement" }; applyCategory(g); c.catId = g.catId; c.needsReview = g.needsReview; c.suggest = g.suggest; c.ruleCat = g.ruleCat;
     });
     var feeCats = cats().filter(function (x) { return guessKind(x.name + " " + (x.group || "")) === "fees"; });
     var feeCat = feeCats.filter(function (x) { return /bank\s?(fees?|charges|koste)/i.test(x.name); })[0] || feeCats[0];
@@ -1393,7 +1577,7 @@
             if (c.fee) { feeTotal += c.amount; feeCount++; return; }
             var tx = touch({ id: "st_" + hash(c.posted + "|" + c.amount + "|" + c.raw), date: c.date, amount: c.amount, type: c.type, merchant: c.merchant, note: "", source: "statement", raw: c.raw.slice(0, 300) });
             if (db.transactions.some(function (x) { return x.id === tx.id; })) return;
-            if (c.type === "expense") { tx.catId = c.catId || null; tx.needsReview = !c.catId; if (!c.catId) tx.suggest = c.suggest; }
+            if (c.type === "expense") { tx.catId = c.catId || null; tx.needsReview = !c.catId; if (!c.catId) tx.suggest = c.suggest; else if (c.ruleCat) tx.ruleCat = true; else tx.auto = true; }
             else if (c.type === "transfer") tx.catId = TRANSFER;
             db.transactions.push(tx); added++;
             if (c.salary && (!salaryTx || c.date > salaryTx.date)) salaryTx = tx;
@@ -2406,7 +2590,7 @@
     return api("/v1/pull", { code: local.syncCode }).then(function (res) {
       return decryptDoc(res.doc).then(function (remote) {
         var remoteStr = remote ? JSON.stringify(remote) : "";
-        if (remote) db = mergeDocs(db, remote);
+        if (remote) { db = mergeDocs(db, remote); ml.dirty = true; }
         var failed = [];
         (res.inbox || []).forEach(function (it) {
           var r = ingestSms(it.text, it.at);
@@ -2626,6 +2810,11 @@
       case "next-upload": ui.importForNext = true; $("#fileInput").click(); break;
       case "pending-cancel": var pbc = pendingBudget(); if (pbc) { pbc.deleted = true; touch(pbc); } commit(); toast("Cancelled — next month keeps the current budget"); break;
       case "pending-now": var pbn = pendingBudget(); if (pbn) { var rn = applyBudget(pbn.items, pbn.incomeItems, pbn.mode); if (pbn.income != null) { db.settings.income = pbn.income; touch(db.settings); } pbn.applied = true; touch(pbn); commit(); toast("Using the new budget now (" + rn.count + " categories)"); } break;
+      case "group-toggle": local.collapsed = local.collapsed || {}; var gt = groupInfo(stats(period(ui.offset)), period(ui.offset)).filter(function (x) { return x.name === a.dataset.g; })[0];
+        if (gt) { local.collapsed[gt.name] = !groupCollapsed(gt); saveLocal(); } render(); break;
+      case "group-open": local.collapsed = local.collapsed || {}; local.collapsed[a.dataset.g] = false; saveLocal(); render();
+        var gc = $$(".group-card").filter(function (x) { return x.dataset.group === a.dataset.g; })[0];
+        if (gc) gc.scrollIntoView({ behavior: "smooth", block: "start" }); break;
       case "recap-hide": var rpx = recapPeriod(); if (rpx) { local.recapHidden = rpx.s; saveLocal(); } render(); break;
       case "ack-payday": var lp1 = latestPayday(); if (lp1) { local.ackPayday = lp1.id; saveLocal(); } render(); break;
       case "undo-payday": undoPayday(a.dataset.date); commit(); toast("Okay — that payment no longer starts a month"); break;
@@ -2759,5 +2948,5 @@
   syncNow();
 
   // exposed for testing in the console
-  window.Budgie = { buildWorkbook: buildWorkbook, monthSections: monthSections, savedTemplate: savedTemplate, exportMonths: exportMonths, openTour: openTour, recapSlidesEasy: recapSlidesEasy, keepUnread: keepUnread, tidyUnread: tidyUnread, unreadList: unreadList, recapData: recapData, suggestionsFor: suggestionsFor, parseStatementLines: parseStatementLines, statementFromRows: statementFromRows, statementCandidates: statementCandidates, openRecap: openRecap, planSheet: planSheet, statementSheet: statementSheet, period: period, ingestSms: ingestSms, handleFile: handleFile, parseSms: parseSms, detectBudget: detectBudget, categorise: categorise, merchantKey: merchantKey, get db() { return db; } };
+  window.Budgie = { pdfLines: pdfLines, categorise: categorise, mlPredict: mlPredict, mlTrain: mlTrain, mlStats: mlStats, learn: learn, buildWorkbook: buildWorkbook, monthSections: monthSections, savedTemplate: savedTemplate, exportMonths: exportMonths, openTour: openTour, recapSlidesEasy: recapSlidesEasy, keepUnread: keepUnread, tidyUnread: tidyUnread, unreadList: unreadList, recapData: recapData, suggestionsFor: suggestionsFor, parseStatementLines: parseStatementLines, statementFromRows: statementFromRows, statementCandidates: statementCandidates, openRecap: openRecap, planSheet: planSheet, statementSheet: statementSheet, period: period, ingestSms: ingestSms, handleFile: handleFile, parseSms: parseSms, detectBudget: detectBudget, categorise: categorise, merchantKey: merchantKey, get db() { return db; } };
 })();

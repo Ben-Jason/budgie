@@ -218,6 +218,15 @@
   .cat{display:flex; gap:12px; align-items:center; padding:12px 4px; border:none; background:none; width:100%; text-align:left; border-radius:14px;}
   .cat:hover{background:var(--surface-2);}
   .cat + .cat{border-top:1px solid var(--line); border-radius:0;}
+  .gsum{display:block; width:100%; text-align:left; border:none; background:none; padding:10px 2px; color:inherit; font:inherit;}
+  .gsum + .gsum{border-top:1px solid var(--line);}
+  .gsum .top{display:flex; justify-content:space-between; gap:8px; align-items:baseline; margin-bottom:7px;}
+  .gsum .name{font-weight:680;} .gsum .amt{font-size:.86em; white-space:nowrap;}
+  .gsum .meta{display:flex; justify-content:space-between; gap:8px; margin-top:6px; font-size:.76em; color:var(--ink-faint);}
+  .group-toggle{width:100%; border:none; background:none; padding:0; color:inherit; font:inherit; text-align:left; cursor:pointer;}
+  .group-toggle .chev{display:inline-flex; color:var(--ink-faint); transform:rotate(90deg); transition:transform .2s;}
+  .group-card.shut .group-toggle{margin-bottom:4px;} .group-card.shut .chev{transform:none;}
+  .group-note{padding:0 2px;}
   .emoji{width:40px; height:40px; border-radius:12px; background:var(--surface-2); display:flex; align-items:center; justify-content:center; font-size:20px; flex-shrink:0;}
   .cat .body{flex:1; min-width:0; display:block;}
   .cat .top{display:flex; justify-content:space-between; gap:8px; align-items:baseline; margin-bottom:7px;}
