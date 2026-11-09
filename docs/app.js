@@ -241,6 +241,93 @@
     }
     return { count: chosen.length, income: incTotal };
   }
+  // ---- Undoing a budget import
+  function importSnapshot() {
+    var snap = { at: now(), income: db.settings.income, cats: {}, txs: {} };
+    db.categories.forEach(function (c) { snap.cats[c.id] = { budget: c.budget, group: c.group, keywords: c.keywords, fixed: c.fixed, deleted: !!c.deleted }; });
+    txs().forEach(function (t) { snap.txs[t.id] = { catId: t.catId, needsReview: !!t.needsReview }; });
+    local.importUndo = snap; saveLocal();
+    return snap;
+  }
+  function undoImport(snap) {
+    if (!snap) return;
+    db.categories.forEach(function (c) {
+      var o = snap.cats[c.id];
+      if (!o) { if (!c.deleted) { c.deleted = true; touch(c); } return; }
+      if (c.budget !== o.budget || c.group !== o.group || c.keywords !== o.keywords || c.fixed !== o.fixed || !!c.deleted !== o.deleted) {
+        c.budget = o.budget; c.group = o.group; c.keywords = o.keywords; c.fixed = o.fixed; c.deleted = o.deleted; touch(c);
+      }
+    });
+    txs().forEach(function (t) { var o = snap.txs[t.id]; if (o && (t.catId !== o.catId || !!t.needsReview !== o.needsReview)) { t.catId = o.catId; t.needsReview = o.needsReview; touch(t); } });
+    if (snap.income !== db.settings.income) { db.settings.income = snap.income; touch(db.settings); }
+    if (local.importUndo === snap) { delete local.importUndo; saveLocal(); }
+  }
+  // Imports made before the undo existed: categories made in one go share the
+  // time stamp baked into their ids, so a burst of them can still be found.
+  function findImportBatch() {
+    var since = now() - 14 * 864e5, M = Math.pow(36, 5), groups = [];
+    cats().forEach(function (c) {
+      if ((c.updatedAt || 0) < since) return;
+      var made = parseInt(String(c.id).slice(-5), 36);
+      // only categories untouched since they were made (their id and last change share a moment)
+      if (isNaN(made) || (((c.updatedAt - made) % M) + M) % M > 5000) return;
+      var g = groups.filter(function (x) { var d = Math.abs(x.made - made); return Math.min(d, M - d) < 3000; })[0];
+      if (g) g.list.push(c); else groups.push({ made: made, list: [c] });
+    });
+    groups = groups.filter(function (g) { return g.list.length >= 4; });
+    if (!groups.length) return null;
+    groups.forEach(function (g) { g.at = Math.max.apply(null, g.list.map(function (c) { return c.updatedAt || 0; })); });
+    groups.sort(function (a, b) { return b.at - a.at; });   // the newest import
+    var g = groups[0], at = Math.max.apply(null, g.list.map(function (c) { return c.updatedAt || 0; }));
+    // categories that existed before but had their amount changed in the same import
+    var changed = cats().filter(function (c) { return g.list.indexOf(c) < 0 && Math.abs((c.updatedAt || 0) - at) < 3000; });
+    return { key: String(g.made), at: at, created: g.list, changed: changed };
+  }
+  function lastAmount(c) {
+    var hs = (db.history || []).filter(function (h) { return !h.deleted && h.budgets && h.budgets[c.id] != null && h.start < period(0).s; });
+    hs.sort(function (a, b) { return a.start < b.start ? 1 : -1; });
+    return hs.length ? +hs[0].budgets[c.id] : null;
+  }
+  function importUndoSheet() {
+    var b = findImportBatch();
+    if (local.importUndo && (!b || local.importUndo.at >= b.at - 5000)) {
+      var snap = local.importUndo, made = db.categories.filter(function (c) { return !c.deleted && !snap.cats[c.id]; });
+      openSheet(sheetHead("Undo last import", new Date(snap.at).toLocaleString("en-ZA", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })) +
+        '<p class="muted">This puts your categories, amounts and income back exactly as they were before the import' + (made.length ? ' and removes the ' + made.length + ' categories it added' : '') + '.</p>' +
+        '<button class="btn primary block" id="undoGo" type="button">Undo the import</button>', function (el) {
+        $("#undoGo", el).onclick = function () { undoImport(snap); closeSheet(); commit(); toast("Import undone ✓"); };
+      });
+      return;
+    }
+    if (!b) { toast("I couldn’t find a recent import to undo"); return; }
+    var byCat = {}; txs().forEach(function (t) { if (t.catId) byCat[t.catId] = (byCat[t.catId] || 0) + 1; });
+    var rows = b.created.map(function (c) { return { c: c, n: byCat[c.id] || 0, on: !(byCat[c.id] > 0) }; });
+    var fixes = b.changed.map(function (c) { var was = lastAmount(c); return { c: c, was: was, on: was != null && was !== +c.budget }; }).filter(function (x) { return x.was != null && x.was !== +x.c.budget; });
+    function draw() {
+      var nOn = rows.filter(function (r) { return r.on; }).length + fixes.filter(function (f) { return f.on; }).length;
+      openSheet(sheetHead("Remove imported categories", b.created.length + " added on " + new Date(b.at).toLocaleString("en-ZA", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })) +
+        '<p class="small muted" style="margin-top:0">These categories were all added at the same moment by one import. Untick any you want to keep.</p>' +
+        '<div style="max-height:46dvh;overflow:auto"><table class="imp-table"><tbody>' +
+        rows.map(function (r, i) { return '<tr><td style="width:30px"><input type="checkbox" data-r="' + i + '" ' + (r.on ? "checked" : "") + ' style="width:20px;height:20px;accent-color:var(--accent)"></td><td>' + esc(r.c.emoji || "") + ' ' + esc(r.c.name) + (r.n ? ' <span class="small faint">· ' + r.n + ' payment' + (r.n > 1 ? "s" : "") + '</span>' : '') + '</td><td class="num small" style="text-align:right">' + money(+r.c.budget || 0) + '</td></tr>'; }).join("") +
+        (fixes.length ? '<tr><td colspan="3" class="g" style="padding-top:12px"><b>Amounts the import changed</b> · put back last month’s amount</td></tr>' + fixes.map(function (f, i) {
+          return '<tr><td><input type="checkbox" data-f="' + i + '" ' + (f.on ? "checked" : "") + ' style="width:20px;height:20px;accent-color:var(--accent)"></td><td>' + esc(f.c.emoji || "") + ' ' + esc(f.c.name) + '</td><td class="num small" style="text-align:right">' + money(+f.c.budget || 0) + ' → <b>' + money(f.was) + '</b></td></tr>'; }).join("") : "") +
+        '</tbody></table></div>' +
+        '<button class="btn primary block" id="undoGo" type="button" style="margin-top:12px"' + (nOn ? "" : " disabled") + '>Fix ' + nOn + ' categor' + (nOn === 1 ? "y" : "ies") + '</button>' +
+        '<p class="small faint" style="text-align:center">Payments in a removed category go back to “to sort”.</p>', function (el) {
+        el.onchange = function (e) { var t = e.target; if (t.dataset.r != null) rows[+t.dataset.r].on = t.checked; if (t.dataset.f != null) fixes[+t.dataset.f].on = t.checked; draw(); };
+        $("#undoGo", el).onclick = function () {
+          var gone = 0;
+          rows.forEach(function (r) { if (!r.on) return; r.c.deleted = true; touch(r.c); gone++;
+            txs().forEach(function (t) { if (t.catId === r.c.id) { t.catId = null; t.needsReview = true; touch(t); } }); });
+          fixes.forEach(function (f) { if (f.on) { f.c.budget = f.was; touch(f.c); } });
+          local.importUndoHidden = b.key; saveLocal();
+          closeSheet(); commit(); toast("Removed " + gone + " categories ✓");
+        };
+      });
+    }
+    draw();
+  }
+
   function scheduleBudget(items, incomeItems, mode, fname, extra) {
     (db.pending || []).forEach(function (x) { if (!x.deleted && !x.applied) { x.deleted = true; touch(x); } });
     db.pending = db.pending || [];
@@ -836,6 +923,11 @@
         })() + '</div>' +
         '<div class="row wrap" style="margin-top:10px"><button class="btn sm primary" data-act="ack-payday" type="button">Looks good</button><button class="btn sm" data-tab="budget" type="button">Change budget</button><button class="btn sm" data-act="undo-payday" data-date="' + lp.date + '" type="button">Not my salary</button></div></div></div></div>';
     }
+    var ib = p.current && findImportBatch();
+    // only nag about bursts that look like payments (odd amounts), made in the last few days
+    var oddAmts = ib ? ib.created.filter(function (c) { var b = +c.budget || 0; return b && (b % 10 !== 0); }).length : 0;
+    if (ib && local.importUndoHidden !== ib.key && ib.at > (local.importUndoSeen || 0) && now() - ib.at < 3 * 864e5 && ib.created.length >= 6 && oddAmts >= ib.created.length * 0.5) h += '<div class="card" style="border-color:var(--warn)"><div class="row" style="align-items:flex-start"><span style="font-size:24px">🧹</span><div class="spacer"><b>' + ib.created.length + ' categories were added in one go</b><div class="small muted">If a bank statement was read as a budget by mistake, you can remove them.</div>' +
+      '<div class="row wrap" style="margin-top:10px"><button class="btn sm primary" data-act="import-undo" type="button">Review & remove</button><button class="btn sm" data-act="import-undo-hide" type="button">They’re fine</button></div></div></div></div>';
     if (sample) h += '<div class="card flat row small" style="background:var(--accent-soft);border-color:transparent"><span>🧪</span><span class="spacer">You’re looking at sample data.</span><button class="btn sm primary" data-act="clear-sample" type="button">Start fresh</button></div>';
     h += '<div class="grid-2"><div>';
     h += '<div class="card hero"><div class="eyebrow">' + (left >= 0 ? "Left to spend" : "Over budget") + (p.current ? "" : " · " + esc(p.label)) + '</div>' +
@@ -1162,6 +1254,7 @@
     h += '</div><div>';
     h += '<div class="card"><div class="card-h"><h3>Your data</h3></div><div class="row wrap">' +
       '<button class="btn sm" data-act="export" type="button">⬇️ Download backup</button><button class="btn sm" data-act="import-backup" type="button">⬆️ Restore backup</button>' +
+      '<button class="btn sm" data-act="import-undo" type="button">↩️ Undo a budget import</button>' +
       '<button class="btn sm" data-act="export-csv" type="button">Transactions as CSV</button><button class="btn sm" data-act="export-xlsx" type="button">📤 Budget vs actual (Excel)</button></div>' +
       (function () { var st = mlStats(); return '<p class="small faint">🧠 Auto-sorting has learned from ' + st.learned + ' of your choices' + (st.accuracy != null ? ' · ' + st.accuracy + '% of its sorting in the last 60 days needed no fixing (' + st.wrong + ' corrected)' : '') + '</p>'; })() +
       '<p class="small faint">Remembered shops: ' + db.rules.filter(function (r) { return !r.deleted; }).length + ' · Transactions: ' + txs().length + '</p>' +
@@ -1421,7 +1514,7 @@
   function money2num(t) { var neg = /^-/.test(t); var v = parseAmount(t.replace(/^-/, "")); return neg ? -v : v; }
   function normDate(d) {
     var m;
-    if ((m = d.match(/^(\d{4})-(\d{2})-(\d{2})/))) return m[1] + "-" + m[2] + "-" + m[3];
+    if ((m = d.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/))) return m[1] + "-" + pad(+m[2]) + "-" + pad(+m[3]);
     if ((m = d.match(/^(\d{1,2})[\/.](\d{1,2})[\/.](\d{2,4})/))) { var y = +m[3]; if (y < 100) y += 2000; return y + "-" + pad(+m[2]) + "-" + pad(+m[1]); }
     if ((m = d.toLowerCase().match(/^(\d{1,2})\s?([a-z]{3})[a-z]*\s?(\d{4})/)) && MON3.indexOf(m[2]) > -1) return m[3] + "-" + pad(MON3.indexOf(m[2]) + 1) + "-" + pad(+m[1]);
     return null;
@@ -1449,13 +1542,13 @@
   // Rows from CSV/Excel → records, if the sheet looks like a statement (date + amount + description)
   function statementFromRows(rows) {
     rows = (rows || []).filter(function (r) { return r && r.some(function (c) { return String(c).trim() !== ""; }); });
-    for (var h = 0; h < Math.min(rows.length, 12); h++) {
+    for (var h = 0; h < Math.min(rows.length, 40); h++) {
       var hdr = rows[h].map(function (c) { return String(c).toLowerCase().trim(); });
-      var di = hdr.findIndex(function (c) { return /date/.test(c); });
+      var di = hdr.findIndex(function (c) { return /date|datum/.test(c); });
       var ai = hdr.findIndex(function (c) { return /^amount|amount \(|^value$|bedrag/.test(c); });
-      var dbi = hdr.findIndex(function (c) { return /^debit|withdraw|paid out|money out/.test(c); });
-      var cri = hdr.findIndex(function (c) { return /^credit|deposit|paid in|money in/.test(c); });
-      var xi = hdr.findIndex(function (c) { return /desc|details|narrative|merchant|transaction|reference|particulars/.test(c); });
+      var dbi = hdr.findIndex(function (c) { return /^debit|^debiet|withdraw|paid out|money out/.test(c); });
+      var cri = hdr.findIndex(function (c) { return /^credit|^krediet|deposit|paid in|money in/.test(c); });
+      var xi = hdr.findIndex(function (c) { return /desc|details|narrative|merchant|transaction|reference|particulars|beskrywing|besonderhede|transaksie|verwysing/.test(c); });
       var ti = hdr.findIndex(function (c) { return /^type$/.test(c); });
       if (di < 0 || xi < 0 || (ai < 0 && dbi < 0)) continue;
       var out = [];
@@ -1469,6 +1562,16 @@
       return out.length >= 3 ? out : null;
     }
     return null;
+  }
+  // Rows that start with dates and carry amounts are payments, not budget lines.
+  function looksLikeStatement(rows) {
+    var dated = 0, n = 0;
+    (rows || []).forEach(function (r) {
+      if (!r || !r.some(function (c) { return String(c).trim() !== ""; })) return;
+      n++;
+      if (r.slice(0, 3).some(function (c) { return typeof c === "number" ? c > 40000 && c < 60000 : !!normDate(String(c).trim()); }) && r.some(isNumCell)) dated++;
+    });
+    return dated >= 5 && dated >= n * 0.4;
   }
   function cleanStatementMerchant(d) {
     if (/absapay/i.test(d)) return "Online payment (AbsaPay)";
@@ -2239,12 +2342,19 @@
   }
   function handleFile(file) {
     if (!file) return;
-    var name = file.name.toLowerCase();
+    var name = file.name.toLowerCase(), wantSt = ui.wantStatement;
+    ui.wantStatement = false;
+    var notStatement = function () { toast("That doesn’t look like a bank statement — I need a date, description and amount column. Nothing was changed."); };
     if (/\.json$/.test(name)) { restoreBackup(file); return; }
     if (/\.pdf$/.test(name)) { importStatementPdf(file); return; }
     var reader = new FileReader();
     if (/\.csv$|\.txt$/.test(name)) {
-      reader.onload = function () { var rows = parseCsv(String(reader.result)), st = statementFromRows(rows); if (st && !ui.importForNext) statementSheet(st, file.name); else importRows(rows, file.name); };
+      reader.onload = function () {
+        var rows = parseCsv(String(reader.result)), st = statementFromRows(rows);
+        if (st && !ui.importForNext) statementSheet(st, file.name);
+        else if (wantSt || looksLikeStatement(rows)) notStatement();
+        else importRows(rows, file.name);
+      };
       reader.readAsText(file);
     } else {
       toast("Reading " + file.name + "…");
@@ -2264,7 +2374,10 @@
             if (good.length) best = good[0].rows;
             var stRows = null;
             wb.SheetNames.some(function (sn) { stRows = statementFromRows(X.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: true, defval: "" })); return !!stRows; });
-            if (stRows && !ui.importForNext && (!best || detectBudget(best).items.length < 3)) statementSheet(stRows, file.name);
+            // a sheet of dated payments is a statement, even if it also looks a bit like a budget
+            if (stRows && !ui.importForNext) statementSheet(stRows, file.name);
+            else if (wantSt || (!best && wb.SheetNames.some(function (sn) { return looksLikeStatement(X.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: true, defval: "" })); }))) notStatement();
+            else if (best && looksLikeStatement(best)) notStatement();
             else importRows(best || [], file.name, good.map(function (g) { return { name: g.name, rows: g.rows }; }));
           } catch (e) { toast("Couldn't read that file: " + e.message); }
         };
@@ -2464,9 +2577,12 @@
             toast("📄 Saved — it switches on when your next salary arrives");
             return;
           }
+          var undo = importSnapshot();
           var r = applyBudget(det.items, det.incomeItems, mode);
+          local.importUndoSeen = now() + 5000; saveLocal();
           if (tplNow) saveTemplate(tplNow);
-          closeSheet(); ui.tab = "home"; commit(); toast("Imported " + r.count + " categories" + (r.income ? " · income " + money(r.income) : "") + " ✓");
+          closeSheet(); ui.tab = "home"; commit();
+          toast("Imported " + r.count + " categories" + (r.income ? " · income " + money(r.income) : "") + " ✓", "Undo", function () { undoImport(undo); commit(); toast("Import undone ✓"); });
         };
       });
     }
@@ -2821,8 +2937,10 @@
       case "del-payday": undoPayday(a.dataset.date); commit(); break;
       case "sms-test": smsTest(a); break;
       case "filter": ui.actFilter = a.dataset.f; render(); break;
-      case "pick-file": ui.importForNext = false; $("#fileInput").click(); break;
-      case "pick-statement": ui.importForNext = false; $("#fileInput").click(); break;
+      case "pick-file": ui.importForNext = false; ui.wantStatement = false; $("#fileInput").click(); break;
+      case "pick-statement": ui.importForNext = false; ui.wantStatement = true; $("#fileInput").click(); break;
+      case "import-undo": importUndoSheet(); break;
+      case "import-undo-hide": local.importUndoHidden = (findImportBatch() || {}).key; local.importUndoSeen = now(); saveLocal(); render(); break;
       case "plan": planSheet(); break;
       case "export-xlsx": if (!cats().length) { toast("Set up your budget first"); break; } exportSheet(); break;
       case "tour": openTour(0); break;
@@ -2948,5 +3066,5 @@
   syncNow();
 
   // exposed for testing in the console
-  window.Budgie = { pdfLines: pdfLines, categorise: categorise, mlPredict: mlPredict, mlTrain: mlTrain, mlStats: mlStats, learn: learn, buildWorkbook: buildWorkbook, monthSections: monthSections, savedTemplate: savedTemplate, exportMonths: exportMonths, openTour: openTour, recapSlidesEasy: recapSlidesEasy, keepUnread: keepUnread, tidyUnread: tidyUnread, unreadList: unreadList, recapData: recapData, suggestionsFor: suggestionsFor, parseStatementLines: parseStatementLines, statementFromRows: statementFromRows, statementCandidates: statementCandidates, openRecap: openRecap, planSheet: planSheet, statementSheet: statementSheet, period: period, ingestSms: ingestSms, handleFile: handleFile, parseSms: parseSms, detectBudget: detectBudget, categorise: categorise, merchantKey: merchantKey, get db() { return db; } };
+  window.Budgie = { findImportBatch: findImportBatch, looksLikeStatement: looksLikeStatement, handleFile: handleFile, statementFromRows: statementFromRows, pdfLines: pdfLines, categorise: categorise, mlPredict: mlPredict, mlTrain: mlTrain, mlStats: mlStats, learn: learn, buildWorkbook: buildWorkbook, monthSections: monthSections, savedTemplate: savedTemplate, exportMonths: exportMonths, openTour: openTour, recapSlidesEasy: recapSlidesEasy, keepUnread: keepUnread, tidyUnread: tidyUnread, unreadList: unreadList, recapData: recapData, suggestionsFor: suggestionsFor, parseStatementLines: parseStatementLines, statementFromRows: statementFromRows, statementCandidates: statementCandidates, openRecap: openRecap, planSheet: planSheet, statementSheet: statementSheet, period: period, ingestSms: ingestSms, handleFile: handleFile, parseSms: parseSms, detectBudget: detectBudget, categorise: categorise, merchantKey: merchantKey, get db() { return db; } };
 })();
