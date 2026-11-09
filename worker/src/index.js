@@ -32,6 +32,14 @@ async function spaceId(code) {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 40);
 }
 
+// Shortcuts makes it easy to type "code " or "Text" as a field name; match them anyway.
+function tidyKeys(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+  const out = {};
+  for (const [k, v] of Object.entries(body)) out[String(k).trim().toLowerCase()] = typeof v === "string" ? v.trim() : v;
+  return out;
+}
+
 async function readBody(request, url) {
   const type = request.headers.get("content-type") || "";
   const raw = await request.text();
@@ -51,7 +59,7 @@ export default {
     if (request.method !== "POST") return json({ error: "not found" }, 404);
 
     let body;
-    try { body = await readBody(request, url); } catch { return json({ error: "bad request" }, 400); }
+    try { body = tidyKeys(await readBody(request, url)); } catch { return json({ error: "bad request" }, 400); }
     const id = await spaceId(body.code || url.searchParams.get("code"));
     if (!id) {
       console.log(JSON.stringify({ path: url.pathname, result: "invalid-code", type: request.headers.get("content-type"), keys: Object.keys(body || {}) }));
